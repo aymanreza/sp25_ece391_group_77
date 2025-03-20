@@ -225,6 +225,30 @@ int ioseek(struct io * io, unsigned long long pos) {
 
 struct io * create_memory_io(void * buf, size_t size) {
     // FIX ME
+    // checking for valid inputs
+    if (!buf || size <= 0) {
+        return -EINVAL;
+    }
+
+    // allocating memory for memio struct
+    struct memio *mio = kcalloc(1, sizeof(struct memio));
+    if (!mio) {
+        return -ENOMEM;
+    }
+
+    // initializing memio struct paramenters
+    mio->buf = buf;
+    mio->size = size;
+
+    // setting up memio io interface
+    static const struct iointf memio_iointf = {
+        .cntl = &memio_cntl,
+        .readat = &memio_readat,
+        .writeat = &memio_writeat
+    };
+
+    // initializing memio io
+    return ioinit1(&mio->io, &memio_iointf);
 }
 
 struct io * create_seekable_io(struct io * io) {
