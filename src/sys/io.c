@@ -286,6 +286,31 @@ long memio_readat (
     void * buf, long bufsz)
 {
     // FIX ME
+    // making sure io and interface are valid
+    assert(io != NULL);
+    assert(io->intf != NULL);
+
+    // making sure bufsz is not negative
+    if (bufsz < 0) {
+        return -EINVAL;
+    }
+
+    struct memio * const mio = (void*)io - offsetof(struct memio, io);
+
+    // if position is greater than or equal to memio size, then there is nothing to read
+    if (pos >= mio->size) {
+        return 0;
+    }
+
+    // clamping bufsz to remaining buffer space if it is too large
+    if ((unsigned long long)bufsz > mio->size - pos) {
+        bufsz = mio->size - pos;
+    }
+
+    // copying memory from memio to provided buffer
+    memcpy(buf, mio->buf + pos, bufsz);
+
+    return bufsz;
 }
 
 long memio_writeat (
@@ -294,6 +319,31 @@ long memio_writeat (
     const void * buf, long len)
 {
     // FIX ME
+    // making sure io and interface are valid
+    assert(io != NULL);
+    assert(io->intf != NULL);
+
+    // making sure bufsz is not negative
+    if (bufsz < 0) {
+        return -EINVAL;
+    }
+
+    struct memio * const mio = (void*)io - offsetof(struct memio, io);
+
+    // if position is greater than or equal to memio size, the value of pos is invalid
+    if (pos >= mio->size) {
+        return -EINVAL;
+    }
+
+    // clamping bufsz to remaining buffer space if it is too large
+    if ((unsigned long long)bufsz > mio->size - pos) {
+        bufsz = mio->size - pos;
+    }
+
+    // copying memory from provided buffer to memio
+    memcpy(mio->buf + pos, buf, bufsz);
+
+    return bufsz;
 }
 
 int memio_cntl(struct io * io, int cmd, void * arg) {
