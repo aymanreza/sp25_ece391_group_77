@@ -70,6 +70,13 @@ static const struct iointf seekio_iointf = {
     .writeat = &seekio_writeat
 };
 
+// setting up memio io interface
+static const struct iointf memio_iointf = {
+    .cntl = &memio_cntl,
+    .readat = &memio_readat,
+    .writeat = &memio_writeat
+};
+
 // EXPORTED FUNCTION DEFINITIONS
 //
 
@@ -225,6 +232,23 @@ int ioseek(struct io * io, unsigned long long pos) {
 
 struct io * create_memory_io(void * buf, size_t size) {
     // FIX ME
+    // checking for valid inputs
+    if (!buf || size <= 0) {
+        return -EINVAL;
+    }
+
+    // allocating memory for memio struct
+    struct memio *mio = kcalloc(1, sizeof(struct memio));
+    if (!mio) {
+        return -ENOMEM;
+    }
+
+    // initializing memio struct paramenters
+    mio->buf = buf;
+    mio->size = size;
+
+    // initializing memio io
+    return ioinit1(&mio->io, &memio_iointf);
 }
 
 struct io * create_seekable_io(struct io * io) {
@@ -262,6 +286,31 @@ long memio_readat (
     void * buf, long bufsz)
 {
     // FIX ME
+    // making sure io and interface are valid
+    assert(io != NULL);
+    assert(io->intf != NULL);
+
+    // making sure bufsz is not negative
+    if (bufsz < 0) {
+        return -EINVAL;
+    }
+
+    struct memio * const mio = (void*)io - offsetof(struct memio, io);
+
+    // if position is greater than or equal to memio size, then there is nothing to read
+    if (pos >= mio->size) {
+        return 0;
+    }
+
+    // clamping bufsz to remaining buffer space if it is too large
+    if ((unsigned long long)bufsz > mio->size - pos) {
+        bufsz = mio->size - pos;
+    }
+
+    // copying memory from memio to provided buffer
+    memcpy(buf, mio->buf + pos, bufsz);
+
+    return bufsz;
 }
 
 long memio_writeat (
@@ -270,10 +319,60 @@ long memio_writeat (
     const void * buf, long len)
 {
     // FIX ME
+    // making sure io and interface are valid
+    assert(io != NULL);
+    assert(io->intf != NULL);
+
+    // making sure len is not negative
+    if (len < 0) {
+        return -EINVAL;
+    }
+
+    struct memio * const mio = (void*)io - offsetof(struct memio, io);
+
+    // if position is greater than or equal to memio size, the value of pos is invalid
+    if (pos >= mio->size) {
+        return -EINVAL;
+    }
+
+    // clamping bufsz to remaining buffer space if it is too large
+    if ((unsigned long long)len > mio->size - pos) {
+        len = mio->size - pos;
+    }
+
+    // copying memory from provided buffer to memio
+    memcpy(mio->buf + pos, buf, len);
+
+    return len;
 }
 
 int memio_cntl(struct io * io, int cmd, void * arg) {
     // FIX ME
+    // making sure io and interface are valid
+    assert(io != NULL);
+    assert(io->intf != NULL);
+
+    struct memio * const mio = (void*)io - offsetof(struct memio, io);
+    unsigned long long * ullarg = arg;
+
+    switch (cmd) {
+        // returning 1 in case of get block size command
+        case IOCTL_GETBLKSZ:
+            return 1;
+        // storing total buffer size in arg and returning 0 for success
+        case IOCTL_GETEND:
+            *ullarg = mio->size;
+            return 0;
+        // returns error if new end exceeds buffer size; else, return 0 for success
+        case IOCTL_SETEND:
+            if (*ullarg > mio->size) {
+                return -EINVAL;
+            }
+            return 0;
+        // returns unsupported command error if not one of the three above
+        default:
+            return -ENOTSUP;
+    }
 }
 
 void seekio_close(struct io * io) {
