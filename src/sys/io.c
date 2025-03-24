@@ -348,6 +348,31 @@ long memio_writeat (
 
 int memio_cntl(struct io * io, int cmd, void * arg) {
     // FIX ME
+    // making sure io and interface are valid
+    assert(io != NULL);
+    assert(io->intf != NULL);
+
+    struct memio * const mio = (void*)io - offsetof(struct memio, io);
+    unsigned long long * ullarg = arg;
+
+    switch (cmd) {
+        // returning 1 in case of get block size command
+        case IOCTL_GETBLKSZ:
+            return 1;
+        // storing total buffer size in arg and returning 0 for success
+        case IOCTL_GETEND:
+            *ullarg = mio->size;
+            return 0;
+        // returns error if new end exceeds buffer size; else, return 0 for success
+        case IOCTL_SETEND:
+            if (*ullarg > mio->size) {
+                return -EINVAL;
+            }
+            return 0;
+        // returns unsupported command error if not one of the three above
+        default:
+            return -ENOTSUP;
+    }
 }
 
 void seekio_close(struct io * io) {
