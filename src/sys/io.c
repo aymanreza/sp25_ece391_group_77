@@ -70,6 +70,13 @@ static const struct iointf seekio_iointf = {
     .writeat = &seekio_writeat
 };
 
+// setting up memio io interface
+static const struct iointf memio_iointf = {
+    .cntl = &memio_cntl,
+    .readat = &memio_readat,
+    .writeat = &memio_writeat
+};
+
 // EXPORTED FUNCTION DEFINITIONS
 //
 
@@ -240,13 +247,6 @@ struct io * create_memory_io(void * buf, size_t size) {
     mio->buf = buf;
     mio->size = size;
 
-    // setting up memio io interface
-    static const struct iointf memio_iointf = {
-        .cntl = &memio_cntl,
-        .readat = &memio_readat,
-        .writeat = &memio_writeat
-    };
-
     // initializing memio io
     return ioinit1(&mio->io, &memio_iointf);
 }
@@ -323,8 +323,8 @@ long memio_writeat (
     assert(io != NULL);
     assert(io->intf != NULL);
 
-    // making sure bufsz is not negative
-    if (bufsz < 0) {
+    // making sure len is not negative
+    if (len < 0) {
         return -EINVAL;
     }
 
@@ -336,14 +336,14 @@ long memio_writeat (
     }
 
     // clamping bufsz to remaining buffer space if it is too large
-    if ((unsigned long long)bufsz > mio->size - pos) {
-        bufsz = mio->size - pos;
+    if ((unsigned long long)len > mio->size - pos) {
+        len = mio->size - pos;
     }
 
     // copying memory from provided buffer to memio
-    memcpy(mio->buf + pos, buf, bufsz);
+    memcpy(mio->buf + pos, buf, len);
 
-    return bufsz;
+    return len;
 }
 
 int memio_cntl(struct io * io, int cmd, void * arg) {
