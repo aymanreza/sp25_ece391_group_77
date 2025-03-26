@@ -28,7 +28,18 @@
 
 struct ktfs_file {
     // Fill to fulfill spec
+    struct io io;              // unified I/O interface
+    unsigned int size;
+    unsigned int inode_num;
+    int flags;
 };
+
+// global file system
+struct ktfs {
+    struct io *bdev;               // underlying block device
+    struct ktfs_superblock sb;     // loaded from block 0
+    // maybe add cache
+} fs;
 
 // INTERNAL FUNCTION DECLARATIONS
 //
@@ -60,12 +71,31 @@ int fsflush(void)
 // EXPORTED FUNCTION DEFINITIONS
 //
 
-int ktfs_mount(struct io * io)
-{
-    struct ktfs_superblock superblock;
-    global_fs.io = io;
-    global_fs.superblock = superblock;
-    // need to the get block to acess how many time the user need it 
+int ktfs_mount(struct io * io) {
+    // checking validity of io argument
+    if (!io) 
+        return -EINVAL;
+
+    fs.bdev = ioaddref(io); // adding io reference (backing device) and storing into filesystem struct
+
+    static char buf[KTFS_BLKSZ]; // buffer to read superblock
+
+    int ret = ioreadat(fs.bdev, 0, buf, KTFS_BLKSZ); // reading data from superblock (first block)
+
+    if(ret != KTFS_BLKSZ) //sanity check, making sure read size is 512
+        return -EIO;
+
+    memcpy(&fs.sb, buf, sizeof(struct ktfs_superblock)); //copying the data retrieved into driver memory
+
+    // sanity check to make sure the super block is not unitilized
+    if (fs.sb.block_count == 0 ||
+        fs.sb.bitmap_block_count == 0 ||
+        fs.sb.inode_block_count == 0 ||
+        fs.sb.root_directory_inode == 0) {
+        return -EINVAL;
+    }
+
+    // return success
     return 0;
 }
 
@@ -81,7 +111,6 @@ void ktfs_close(struct io* io)
         return; 
     }
     struct ktfs_file *file = (struct ktfs_file *)io;
-    file->in_use = 0;
 
     //global array curently open files 
 }
