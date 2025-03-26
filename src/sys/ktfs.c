@@ -62,17 +62,28 @@ int fsflush(void)
 
 int ktfs_mount(struct io * io)
 {
+    struct ktfs_superblock superblock;
+    global_fs.io = io;
+    global_fs.superblock = superblock;
+    // need to the get block to acess how many time the user need it 
     return 0;
 }
 
 int ktfs_open(const char * name, struct io ** ioptr)
 {
-    return 0;
-}
 
+ 
+}
 void ktfs_close(struct io* io)
 {
-    return;
+    if (io==0) 
+    {
+        return; 
+    }
+    struct ktfs_file *file = (struct ktfs_file *)io;
+    file->in_use = 0;
+
+    //global array curently open files 
 }
 
 long ktfs_readat(struct io* io, unsigned long long pos, void * buf, long len)
@@ -87,5 +98,11 @@ int ktfs_cntl(struct io *io, int cmd, void *arg)
 
 int ktfs_flush(void)
 {
-    return 0;
+    struct cache *global_cache; 
+    if (global_cache==0) 
+    {
+        return 0; 
+    }
+    return cache_flush(global_cache); 
+    
 }
