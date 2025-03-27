@@ -95,6 +95,7 @@ struct thread {
     struct thread * list_next;
     struct condition * wait_cond;
     struct condition child_exit;
+    struct lock * lock_list; // added linked list of locks currently held by this thread
 };
 
 
@@ -337,14 +338,25 @@ int thread_spawn (
 }
 // Inputs: none
 // Outputs: none
-// Description/Side Effects: It will end the current and main tread exist, it will halt. It set the tread state to the exited, notfiy the parent,
-// and suspend to switch to another thread. The side effect is thread states, signal for the parent thread and suspend execution
+// Description/Side Effects: It will end the current and main tread exist, it will halt. The function interates through all locks in the lock_list and releases them. 
+// It set the tread state to the exited, notfiy the parent, and suspend to switch to another thread. The side effect is thread states, signal for the parent thread and suspend execution
 void thread_exit(void) {
     // FIXME your code goes here
    if(TP->id == MAIN_TID) // check if the main attmpet exit which will end the program
    {
     halt_success(); // this will not continue if the main thread exist
    }
+
+   // this is the head of the lock_list
+   struct lock *lock = TP->lock_list;
+
+   // move through all elements of the lock_list and call lock_release on all of the lock in it
+    while (lock != NULL) {
+        struct lock *next = lock->next;
+        lock_release(lock);
+        lock = next;
+    }
+
    set_thread_state(TP, THREAD_EXITED); // this will check if the current thread exist
     condition_broadcast(&TP->parent->child_exit); //notify the parent thread if the thread exist
     running_thread_suspend(); // this will suspend the execution and change to the avaibale thread
@@ -738,4 +750,91 @@ void idle_thread_func(void) {
             asm ("wfi");
         enable_interrupts();
     }
+}
+
+// Inputs: lock - pointer to the lock to initialize
+// Outputs: None
+// Description: Initializes the lock struct, setting the owner and next lock to NULL, count to 0,
+// and linking the condition variable used to block waiting threads.
+void lock_init(struct lock * lock) {
+    // initializing lock parameters
+    lock->owner = NULL;
+    lock->count = 0;
+    lock->next = NULL;
+    condition_init(&lock->lock_release, "lock_cond");
+}
+
+void lock_acquire(struct lock * lock) {
+    // disabling interrupts before modifying lock_list
+    int pie = disable_interrupts();
+
+    // if the lock's owner is the currently running thread, increment the count, restore interrupts and return
+    if (lock->owner == TP) {
+        lock->count++;
+        restore_interrupts(pie);
+        return;
+    }
+
+    // waiting until lock is released
+    while (lock->owner != NULL) {
+        condition_wait(&lock->lock_release);
+    }
+
+    // acquiring the lock
+    lock->owner = TP;
+    lock->count = 1;
+
+    // adding lock to thread's lock_list
+    lock->next = TP->lock_list;
+    TP->lock_list = lock;
+
+    restore_interrupt(pie);
+}
+
+void lock_release(struct lock * lock) {
+    // disabling interrupts before modifying lock_list
+    int pie = disable_interrupts();
+
+    // making sure the currently running thread is the lock's owner
+    assert(lock->owner == TP);
+
+    // if the lock's access count is greater than one, decrement count, restore interrupts and return
+    if (lock->count > 1) {
+        lock->count--;
+        restore_interrupts(pie);
+        return;
+    }
+
+    // releasing the lock
+    lock->owner = NULL;
+    lock->count = 0;
+
+    struct lock *prev = NULL;
+    struct lock *curr = TP->lock_list;
+
+    // move through the lock list to find the current lock
+    while (curr != NULL) {
+        if (curr = lock) {
+            // if lock is at the head of the list
+            if (prev == NULL) {
+                TP->lock_list = curr->next;
+            }
+            // if the lock is after the head
+            else {
+                prev->next = curr->next;
+            }
+            break; // found the lock, exit
+        }
+        // move to next lock in lock_list
+        prev = curr;
+        curr = curr->next;
+    }
+
+    // clearing the lock's next parameter
+    lock->next = NULL;
+
+    // waking up any threads waiting for this lock
+    condition_broadcast(&lock->lock_release);
+
+    restore_interrupts(pie);
 }
