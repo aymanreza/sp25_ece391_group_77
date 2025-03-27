@@ -102,4 +102,45 @@ struct elf64_phdr {
 
 int elf_load(struct io * elfio, void (**eptr)(void)) {
     // FIX ME
+    struct elf64_ehdr ehdr; // variable to hold the elfheader
+
+    // moving to the start if the ELF file with offset 0
+    ioseek(elfio, 0);
+
+    // reading elfheader from the elf file into memory
+    // if the read fails, then return an IO error
+    if (ioread(elfio, &ehdr, sizeof(ehdr)) != sizeof(ehdr)) {
+        return -EIO;
+    }
+    
+    // checking elf magic numbers to ensure that this is an ELF file
+    // if it isnn't, return a bad format error
+    if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||ehdr.e_ident[2] != 'L' || ehdr.e_ident[3] != 'F') {
+        return -EBADFMT;
+    }
+
+    // checking that that the file is 64-bit ELF
+    if (ehdr.e_ident[EI_CLASS] != ELFCLASS64) {
+        return -EINVAL;
+    }
+
+    // checking that the file is in little-endian format
+    if (ehdr.e_ident[EI_DATA] != ELFDATA2LSB) {
+        return -EINVAL;
+    }
+
+    // checking that the file is using the current ELF version
+    if (ehdr.e_ident[EI_VERSION] != EV_CURRENT) {
+        return -EINVAL;
+    }
+
+    // checking that the file fits riscv architecture
+    if (ehdr.e_machine != EM_RISCV) {
+        return -EINVAL;
+    }
+
+    // checking that the file is executable
+    if (ehdr.e_type != ET_EXEC) {
+        return -EINVAL;
+    }
 }
