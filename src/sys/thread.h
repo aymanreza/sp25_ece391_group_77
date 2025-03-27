@@ -14,6 +14,21 @@ struct thread_list {
     struct thread * tail;
 };
 
+/*
+lock struct
+members:
+    owner - pointer to the thread holding the lock
+    count - number of times owner has acquired the lock
+    lock_release - condition variable used to block and wake up threads waiting on this lock
+    next - pointer to the next lock in the owner's lock list
+*/
+struct lock {
+    struct thread * owner;
+    int count;
+    struct condition lock_release;
+    struct lock * next;
+};
+
 struct condition {
     const char * name; // optional
 	struct thread_list wait_list;
