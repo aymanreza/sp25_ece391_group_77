@@ -8,6 +8,7 @@
 #define KTFS_NUM_DIRECT_DATA_BLOCKS  3
 #define KTFS_NUM_INDIRECT_BLOCKS     1
 #define KTFS_NUM_DINDIRECT_BLOCKS    2
+#define POINTER_BYTESIZE             4
 
 #define KTFS_FILE_IN_USE (1 << 0)
 #define KTFS_FILE_FREE (0 << 0)
