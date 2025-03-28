@@ -419,7 +419,7 @@ static int vioblk_cntl (struct io * io, int cmd, void * arg) {
            return 0;
         }
 
-        // GETEND is out command
+        // GETEND is our command
         case GETEND: {
             if(!arg) // if there is no argument, return error invalid
                 return -EINVAL;
