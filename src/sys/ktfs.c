@@ -98,6 +98,71 @@ int ktfs_read_data_block(uint32_t blockno, void* buf) {
     return ioreadat(fs.bdev, block_idx, buf, KTFS_BLKSZ); // read and fill into the buffer
 }
 
+int get_blocknum_for_offset(struct ktfs_inode *inode, uint32_t file_block_index, uint32_t *out_blockno) {
+    // checking the validity of arguments
+    if (!inode || !out_blockno)
+        return -EINVAL;
+
+    const uint32_t ptrs_per_block = KTFS_BLKSZ / POINTER_BYTESIZE;  // 128 pointers per block
+
+    // DIRECTBLOCK
+    if (file_block_index < KTFS_NUM_DIRECT_DATA_BLOCKS) { // cycling through the direct blocks
+        *out_blockno = inode->block[file_block_index];
+        return (*out_blockno != 0) ? 0 : -ENOENT;
+    }
+
+    // Adjust for indirect
+    file_block_index -= KTFS_NUM_DIRECT_DATA_BLOCKS;
+
+    // INDIRECT BLOCK
+    if (file_block_index < ptrs_per_block) { //cycling through the indirect blocks
+        if (inode->indirect == 0)
+            return -ENOENT;
+
+        uint32_t indirect_block[ptrs_per_block];
+        int ret = ktfs_read_data_block(inode->indirect, indirect_block);
+        if (ret != KTFS_BLKSZ) return -EIO;
+
+        *out_blockno = indirect_block[file_block_index];
+        return (*out_blockno != 0) ? 0 : -ENOENT;
+    }
+
+    // Adjust for doubly indirect
+    file_block_index -= ptrs_per_block;
+
+    // DOUBLY INDIRECT BLOCKS
+    const uint32_t blocks_per_dindirect = ptrs_per_block * ptrs_per_block;
+
+    for (int i = 0; i < KTFS_NUM_DINDIRECT_BLOCKS; i++) { //cycling through the doubly indirect blocks
+        if (file_block_index < blocks_per_dindirect) {
+            if (inode->dindirect[i] == 0)
+                return -ENOENT;
+
+            uint32_t level1[ptrs_per_block];
+            int ret = ktfs_read_data_block(inode->dindirect[i], level1);
+            if (ret != KTFS_BLKSZ) return -EIO;
+
+            uint32_t l1_index = file_block_index / ptrs_per_block;
+            uint32_t l2_index = file_block_index % ptrs_per_block;
+
+            if (level1[l1_index] == 0)
+                return -ENOENT;
+
+            uint32_t level2[ptrs_per_block];
+            ret = ktfs_read_data_block(level1[l1_index], level2);
+            if (ret != KTFS_BLKSZ) return -EIO;
+
+            *out_blockno = level2[l2_index];
+            return (*out_blockno != 0) ? 0 : -ENOENT;
+        }
+
+        file_block_index -= blocks_per_dindirect;
+    }
+
+    // File too large
+    return -ENOENT;
+}
+
 
 // EXPORTED FUNCTION DEFINITIONS
 //
@@ -196,72 +261,78 @@ void ktfs_close(struct io* io) {
 }
 
 long ktfs_readat(struct io* io, unsigned long long pos, void * buf, long len) {
-    // validating arguments
-    assert(io != NULL && buf != NULL && len > 0);
-
-    // retrieve file from io pointer
+    // checking the validity of arguments
+    if (!io || !buf || len < 0) return -EINVAL;
+    
+    // retreiving file from io pointer
     struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io));
 
-    char blk_buf[KTFS_BLKSZ]; // buffer for reading block
-    unsigned int blkno; // block number
-    unsigned int blkoff; // offset  
-    size_t cpy_cnt; //number of bytes to copy
-    long total_read;
+    // if file is in use then dont proceed
+    if (file->flags != KTFS_FILE_IN_USE) return -EINVAL;
+    if (pos >= file->size) return 0; //if position is past the filesize, dont proceed
 
-    
+    // block len to not read past end of file
+    if (pos + len > file->size)
+        len = file->size - pos;
 
-    ktfs_read_data_block(blkno, blk_buf);
-    while(total_read <= len)
-    {
-        blkno = pos / KTFS_BLKSZ; //what block the position starts at
-    blkoff = pos % KTFS_BLKSZ; // specific line in the block
-        if(len<(512-blkoff))
-        {
-            cpy_cnt=len;
-        }
-        else 
-        {
-            cpy_cnt=512-blkoff;
-        }
+    // read the inode for the file to extract info
+    struct ktfs_inode inode;
+    int ret = ktfs_read_inode(file->inode_num, &inode);
+    if (ret < 0) return ret;
+
+    // create out buffer for read
+    char blkbuf[KTFS_BLKSZ];
+    long total_read = 0;
+
+    while (total_read < len) {
+        // update the position adter each read
+        uint64_t cur_pos = pos + total_read;
+        uint32_t block_idx = cur_pos / KTFS_BLKSZ; // which data block we want to read from
+        uint32_t block_offset = cur_pos % KTFS_BLKSZ; // where in the data block we want to read
+        uint32_t bytes_left = len - total_read; // how many bytes left to read
+        uint32_t to_copy = KTFS_BLKSZ - block_offset; // how many bytes to read in current block
+
+        if (to_copy > bytes_left) // if there are less bytes to read than
+            to_copy = bytes_left; // bytes from the offset to the end, tocopy = bytes_left
+
+        uint32_t phys_blockno;
+        ret = get_blocknum_for_offset(&inode, block_idx, &phys_blockno); // retriece block number of where data is in file
+        if (ret < 0) return ret; //failed, return
+
+        ret = ktfs_read_data_block(phys_blockno, blkbuf); // read from the data block (entire 512 bytes)
+        if (ret != KTFS_BLKSZ) return -EIO; // fail
+
+        memcpy((char*)buf + total_read, blkbuf + block_offset, to_copy); // copy data into buffer, by "to_copy" chunks
+        total_read += to_copy; // update how much we read
     }
 
-    
-
-    return 0;
+    return total_read; // return how much we read
 }
 
-int ktfs_cntl(struct io *io, int cmd, void *arg) 
-{
+int ktfs_cntl(struct io *io, int cmd, void *arg) {
     if (!io) return -EINVAL;
 
     struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io)); // this will ge tthe parent file structure from the io pointer 
 
-    if (cmd == IOCTL_GETBLKSZ)  //check if the ge the block size 
-    {
-
+    if (cmd == IOCTL_GETBLKSZ) {  //check if the ge the block size 
         return KTFS_BLKSZ;  // will get the block size 
 
-    } else if (cmd == IOCTL_GETEND) //check if the command get the aize of the file in bytes 
-    {
-
+    } 
+    
+    else if (cmd == IOCTL_GETEND){ //check if the command get the aize of the file in bytes 
         if (!arg) return -EINVAL;
-
         *(unsigned long long *)arg = file->size; //thsi will write the file size to the location by the argument  
         return 0;
-
     } 
-    else
-    {
-        return -ENOTSUP;  // nthis is usupported control command
-    }
+    
+    else return -ENOTSUP;  // nthis is usupported control command
 }
 
 int ktfs_flush(void) {
     struct cache *global_cache; 
-    if (global_cache==0) 
-    {
+    if (global_cache==0)
         return 0; 
-    }
-    return cache_flush(global_cache); 
+    else
+        return cache_flush(global_cache); 
     
 }
