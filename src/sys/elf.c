@@ -114,7 +114,7 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
     }
     
     // checking elf magic numbers to ensure that this is an ELF file
-    // if it isnn't, return a bad format error
+    // if it isn't, return a bad format error
     if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||ehdr.e_ident[2] != 'L' || ehdr.e_ident[3] != 'F') {
         return -EBADFMT;
     }
@@ -143,4 +143,47 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
     if (ehdr.e_type != ET_EXEC) {
         return -EINVAL;
     }
+
+    // looping through program headers
+    for (int i = 0; i < ehdr.e_phnum; i++) {
+        struct elf64_phdr phdr;
+
+        // moving to the offset of the i-th program header
+        ioseek(elfio, ehdr.e_phoff + (i * sizeof(phdr)));
+
+        // reading the program header
+        if (ioread(elfio, &phdr, sizeof(phdr)) != sizeof(phdr)) {
+            return -EIO; // error reading the program header
+        }
+
+        // only loading program headers of type PT_LOAD
+        if (phdr.p_type != PT_LOAD) {
+            continue;
+        }
+
+        // making sure all sections of the program are loaded in correct address space
+        if (phdr.p_vaddr < 0x80100000 || phdr.p_vaddr + phdr.p_memsz > 0x81000000) {
+            return -EINVAL;
+        }
+
+        // moving to the program's file offset
+        ioseek(elfio, phdr.p_offset);
+
+        // casting the virtual address to be used as a pointer to memory
+        void *address_ptr = (void *)(uintptr_t)phdr.p_vaddr;
+
+        // reading the programs contents into memory
+        if (ioread(elfio, address_ptr, phdr.p_filesz) != (int)phdr.p_filesz) {
+            return -EIO; // error while reading program data
+        }
+
+        // zeroing out uninitialized memory where p_memsz > p_filesz
+        memset((char *)address_ptr + phdr.p_filesz, 0, phdr.p_memsz - phdr.p_filesz);
+    }
+
+    // setting the program's entry pointer
+    *eptr = (void (*)(void))(uintptr_t)ehdr.e_entry;
+
+    // returning 0 on success
+    return 0;
 }
