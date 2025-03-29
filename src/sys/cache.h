@@ -12,6 +12,11 @@
 #define CACHE_CLEAN 0
 #define CACHE_DIRTY 1
 
+#define CACHE_INVALID 0
+#define CACHE_VALID 1
+
+#define CACHE_CAPACITY 64
+
 struct io; // extern decl.
 struct cache; // opaque decl.
 
