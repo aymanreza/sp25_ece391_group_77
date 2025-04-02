@@ -248,8 +248,7 @@ int ktfs_open(const char * name, struct io ** ioptr) {
 
 void ktfs_close(struct io* io) {
     // checking validity of arguments
-    if (!io) 
-        return; 
+    if (!io) return; 
 
         struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io));
         file->flags = KTFS_FILE_FREE;  // Clear the in-use flag
