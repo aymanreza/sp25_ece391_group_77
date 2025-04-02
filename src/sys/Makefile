@@ -73,6 +73,9 @@ QEMUOPTS += -device virtio-blk-device,drive=blk0
 QEMUOPTS += -serial mon:stdio
 QEMUOPTS += -serial pty
 
+tools: 
+	/class/ece391/app/ece391-riscv-dev
+
 all: kernel.elf
 
 kernel.elf: $(OBJS) main.o blob.o
@@ -95,3 +98,15 @@ blob.o:
 
 clean:
 	rm -rf *.o dev/*.o test/*.o demo/*.o *.elf
+
+test-main.o: test_main.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+test-main.elf: $(OBJS) test_main.o blob.o
+	$(LD) $(LDFLAGS) -T kernel.ld -o $@ $^
+
+run-test: test-main.elf
+	$(QEMU) $(QEMUOPTS) -m 8M -kernel $<
+
+run-gdb: test-main.elf
+	$(QEMU) $(QEMUOPTS) -m 8M -kernel $< -s -S

@@ -148,6 +148,15 @@ void vioblk_attach(volatile struct virtio_mmio_regs * regs, int irqno) {
 
     assert(regs->device_id == VIRTIO_ID_BLOCK); // making sure id is correct
 
+    // added missing variable declarations?
+    virtio_featset_t needed_features;
+    virtio_featset_t wanted_features;
+    virtio_featset_t enabled_features;
+    int result;
+    uint32_t blksz;
+
+    assert(regs->device_id == VIRTIO_ID_BLOCK); // making sure id is correct
+
     // Negotiate features. We need:
     //  - VIRTIO_F_RING_RESET and
     //  - VIRTIO_F_INDIRECT_DESC

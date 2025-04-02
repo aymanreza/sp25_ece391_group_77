@@ -38,7 +38,7 @@ struct ktfs_file {
 struct ktfs {
     struct io *bdev;               // underlying block device
     struct ktfs_superblock sb;     // loaded from block 0
-    struct cache *cache;
+    // maybe add cache
 } fs;
 
 // INTERNAL FUNCTION DECLARATIONS
@@ -248,7 +248,8 @@ int ktfs_open(const char * name, struct io ** ioptr) {
 
 void ktfs_close(struct io* io) {
     // checking validity of arguments
-    if (!io) return; 
+    if (!io) 
+        return; 
 
         struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io));
         file->flags = KTFS_FILE_FREE;  // Clear the in-use flag
@@ -328,6 +329,10 @@ int ktfs_cntl(struct io *io, int cmd, void *arg) {
 }
 
 int ktfs_flush(void) {
-    if (fs.cache == NULL) return 0;
-    return cache_flush(fs.cache);
+    struct cache *global_cache; 
+    if (global_cache==0)
+        return 0; 
+    else
+        return cache_flush(global_cache); 
+    
 }
