@@ -14,6 +14,12 @@ struct thread_list {
     struct thread * tail;
 };
 
+
+struct condition {
+    const char * name; // optional
+	struct thread_list wait_list;
+};
+
 /*
 lock struct
 members:
@@ -27,11 +33,6 @@ struct lock {
     int count;
     struct condition lock_release;
     struct lock * next;
-};
-
-struct condition {
-    const char * name; // optional
-	struct thread_list wait_list;
 };
 
 // EXPORTED FUNCTION DECLARATIONS
@@ -121,5 +122,9 @@ extern void condition_wait(struct condition * cond);
 // added to the wait queue.
 
 extern void condition_broadcast(struct condition * cond);
+
+void lock_init(struct lock * lock);
+void lock_acquire(struct lock * lock);
+void lock_release(struct lock * lock);
 
 #endif // _THREAD_H_

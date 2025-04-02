@@ -233,15 +233,13 @@ int ioseek(struct io * io, unsigned long long pos) {
 struct io * create_memory_io(void * buf, size_t size) {
     // FIX ME
     // checking for valid inputs
-    if (!buf || size <= 0) {
-        return -EINVAL;
-    }
+
+    assert(buf && size > 0);
 
     // allocating memory for memio struct
     struct memio *mio = kcalloc(1, sizeof(struct memio));
-    if (!mio) {
-        return -ENOMEM;
-    }
+    
+    assert(mio);
 
     // initializing memio struct paramenters
     mio->buf = buf;

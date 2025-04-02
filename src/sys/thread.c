@@ -788,7 +788,7 @@ void lock_acquire(struct lock * lock) {
     lock->next = TP->lock_list;
     TP->lock_list = lock;
 
-    restore_interrupt(pie);
+    restore_interrupts(pie);
 }
 
 void lock_release(struct lock * lock) {
@@ -814,7 +814,7 @@ void lock_release(struct lock * lock) {
 
     // move through the lock list to find the current lock
     while (curr != NULL) {
-        if (curr = lock) {
+        if (curr == lock) {
             // if lock is at the head of the list
             if (prev == NULL) {
                 TP->lock_list = curr->next;
