@@ -16,7 +16,7 @@
 
 #define VIRTIO_MMIO_STEP (VIRTIO1_MMIO_BASE-VIRTIO0_MMIO_BASE)
 extern char _kimg_end[]; 
-void main(void) {
+int basic_test(void) {
     console_init();
     devmgr_init();
     intrmgr_init();
@@ -36,7 +36,7 @@ void main(void) {
     struct io *blkio;
     int result = open_device("vioblk", 0, &blkio);
     assert(result == 0);
-    kprintf("[ok] vioblk device opened\n");
+    // kprintf("[ok] vioblk device opened\n");
 
     // Creating a test buffer
     char write_buf[512] = "Hello ECE391!";
@@ -45,17 +45,25 @@ void main(void) {
     // Write to block 0
     result = iowriteat(blkio, 0, write_buf, 512);
     assert(result == 512);
-    kprintf("[ok] vioblk write to block 0\n");
+    // kprintf("[ok] vioblk write to block 0\n");
 
     // Read back block 0
     result = ioreadat(blkio, 0, read_buf, 512);
     assert(result == 512);
     assert(strcmp(write_buf, read_buf) == 0);
-    kprintf("[ok] vioblk read matches write\n");
+    // kprintf("[ok] vioblk read matches write\n");
 
     ioclose(blkio);
-    kprintf("=== vioblk test passed!!! ===\n");
+    // kprintf("=== vioblk test passed!!! ===\n");
 
-    kprintf("System halted.\n");
-    asm volatile("wfi"); // Wait For Interrupt (RISC-V sleep)
+    // kprintf("System halted.\n");
+    //asm volatile("wfi"); // Wait For Interrupt (RISC-V sleep)
+    return 1;
+}
+
+
+void main(void) {
+    int pass = basic_test();
+    assert(pass);
+    kprintf("======TEST PASSED!======\n");
 }

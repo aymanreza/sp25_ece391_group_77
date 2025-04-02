@@ -312,7 +312,7 @@ static long vioblk_readat (struct io * io, unsigned long long pos, void * buf, l
 
     // sleep until used ring shows the descriptor is completed (will be updated by device)
     int pie = disable_interrupts();
-    while (dev->vq.last_used_idx == dev->vq.used.idx) {
+    while (dev->vq.last_used_idx != dev->vq.used.idx) {
         restore_interrupts(pie);
 
         // wait for thread wake
@@ -385,7 +385,7 @@ static long vioblk_writeat (struct io * io, unsigned long long pos, const void *
 
     // sleep until used ring shows the descriptor is completed (will be updated by device)
     int pie = disable_interrupts();
-    while (dev->vq.last_used_idx == dev->vq.used.idx) {
+    while (dev->vq.last_used_idx != dev->vq.used.idx) {
         restore_interrupts(pie);
 
             // wait for thread wake
