@@ -38,7 +38,7 @@ struct ktfs_file {
 struct ktfs {
     struct io *bdev;               // underlying block device
     struct ktfs_superblock sb;     // loaded from block 0
-    // maybe add cache
+    struct cache *cache;
 } fs;
 
 // INTERNAL FUNCTION DECLARATIONS
@@ -328,11 +328,9 @@ int ktfs_cntl(struct io *io, int cmd, void *arg) {
     else return -ENOTSUP;  // nthis is usupported control command
 }
 
-int ktfs_flush(void) {
-    struct cache *global_cache; 
-    if (global_cache==0)
-        return 0; 
+int ktfs_flush(void) { 
+    if (fs.cache == NULL) return 0; 
     else
-        return cache_flush(global_cache); 
+        return cache_flush(fs.cache); 
     
 }
