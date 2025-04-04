@@ -402,15 +402,15 @@ int thread_join(int tid) {
 
 
             //this will find the first exited child and will recalim the resources
-            for (int i = 0; i < NTHR; i++)  
-            {
-                if (thrtab[i]->parent == TP && thrtab[i]->state != THREAD_EXITED)
-                {
+            for (int i = 0; i < NTHR; i++) {
+                if (thrtab[i] && thrtab[i]->parent == TP && thrtab[i]->state == THREAD_EXITED) {
                     thread_reclaim(i);
-                    return i; // this will return the thread id of the existed child
+                    restore_interrupts(pie);
+                    return i;
                 }
             }
-    }
+            
+         }
     else {
         child = thrtab[tid]; // this will get the child thread from the thread
         //check if the child exit is not childern caller which will give an eror

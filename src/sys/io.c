@@ -436,7 +436,7 @@ long seekio_read(struct io * io, void * buf, long bufsz) {
     bufsz &= ~(sio->blksz - 1);
 
     rcnt = ioreadat(sio->bkgio, pos, buf, bufsz);
-    sio->pos = pos + (rcnt < 0) ? 0 : rcnt;
+    sio->pos = pos + ((rcnt < 0) ? 0 : rcnt);
     return rcnt;
 }
 
@@ -475,7 +475,7 @@ long seekio_write(struct io * io, const void * buf, long len) {
     }
 
     wcnt = iowriteat(sio->bkgio, sio->pos, buf, len);
-    sio->pos = pos + (wcnt < 0) ? 0 : wcnt;
+    sio->pos = pos + ((wcnt < 0) ? 0 : wcnt);
     return wcnt;
 }
 

@@ -101,6 +101,8 @@ struct vioblk_device {
 
     uint32_t blksz;   // Block size 
     struct condition data_cond; // for threads
+    uint64_t capacity;
+    struct lock virtq_lock; // lock
 };
 
 struct virtio_blk_req {
@@ -186,6 +188,8 @@ void vioblk_attach(volatile struct virtio_mmio_regs * regs, int irqno) {
     dev->irqno = irqno;
     dev->blksz = blksz;
 
+    dev->capacity = regs->config.blk.capacity; // in blocks
+
     // define the I/O ops for this device
     static const struct iointf blk_iointf = {
         .close = &vioblk_close,    // vioblk_close
@@ -221,6 +225,7 @@ void vioblk_attach(volatile struct virtio_mmio_regs * regs, int irqno) {
     dev->instno = register_device(VIOBLK_NAME, vioblk_open, dev);
 
     condition_init(&dev->data_cond, "vioblk_data_cond"); //initializing data condition
+    lock_init(&dev->virtq_lock); //initializing lock
 }
 
 static int vioblk_open(struct io ** ioptr, void * aux) {
@@ -232,9 +237,10 @@ static int vioblk_open(struct io ** ioptr, void * aux) {
     struct vioblk_device * dev = (struct vioblk_device *)aux;
 
     // // reinitialize virtqueue indicies so they are 'available' for use
-    dev->vq.avail.idx       = 0;
-    dev->vq.used.idx        = 0;
-    dev->vq.last_used_idx   = 0;
+    // dev->vq.avail.idx       = 0;
+    // dev->vq.used.idx        = 0;
+    // dev->vq.last_used_idx   = 0;
+    memset(&dev->vq.desc[0], 0, sizeof(dev->vq.desc));
 
     // bump refcount and return the io pointer
     ioaddref(&dev->io);  
@@ -272,10 +278,19 @@ static long vioblk_readat (struct io * io, unsigned long long pos, void * buf, l
     if (pos % dev->blksz != 0 || bufsz % dev->blksz != 0)
     return -EINVAL;
 
+    // checking bounds
+    if ((pos + bufsz) > (dev->capacity * dev->blksz))
+    return -EIO;
+
+    lock_acquire(&dev->virtq_lock); // acquiring lock
+
     // creating request for the virtqueue
 
     struct virtio_blk_req *req = kcalloc(1, sizeof(struct virtio_blk_req)); 
-    if (!req)return -ENOMEM;
+    if (!req){
+        lock_release(&dev->virtq_lock); //releasing lock
+        return -ENOMEM;
+    }
     req->type = VIRTIO_BLK_T_IN; 
     req->reserved = 0;
     req->sector = pos / dev->blksz;
@@ -312,13 +327,10 @@ static long vioblk_readat (struct io * io, unsigned long long pos, void * buf, l
 
     // sleep until used ring shows the descriptor is completed (will be updated by device)
     int pie = disable_interrupts();
-    while (dev->vq.last_used_idx != dev->vq.used.idx) {
-        restore_interrupts(pie);
-
+    while (dev->vq.last_used_idx == dev->vq.used.idx) {
         // wait for thread wake
         condition_wait(&dev->data_cond);
 
-        pie = disable_interrupts();
     }
     restore_interrupts(pie);
     __sync_synchronize();
@@ -326,11 +338,16 @@ static long vioblk_readat (struct io * io, unsigned long long pos, void * buf, l
     // check the status byte in descriptor #2
     if (status != 0){
         kfree(req); //freeing request
+        lock_release(&dev->virtq_lock); //releasing lock
         return -EIO;
     }
     kfree(req);
 
+    pie = disable_interrupts();
     memset(&dev->vq.desc[0], 0, sizeof(dev->vq.desc[0]) * 3); //zeroing out descriptors after one request
+    restore_interrupts(pie);
+
+    lock_release(&dev->virtq_lock); //releasing lock
 
     return bufsz;
 }
@@ -346,9 +363,18 @@ static long vioblk_writeat (struct io * io, unsigned long long pos, const void *
     if (pos % dev->blksz != 0 || len % dev->blksz != 0)
     return -EINVAL;
 
+    // checking bounds
+    if ((pos + len) > (dev->capacity * dev->blksz))
+    return -EIO;
+
+    lock_acquire(&dev->virtq_lock); // acquiring lock
+
     // creating request for the virtqueue
     struct virtio_blk_req *req = kcalloc(1, sizeof(struct virtio_blk_req)); 
-    if (!req)return -ENOMEM;
+    if (!req){
+        lock_release(&dev->virtq_lock); //releasing lock
+        return -ENOMEM;
+    }
     req->type = VIRTIO_BLK_T_OUT; 
     req->reserved = 0;
     req->sector = pos / dev->blksz;
@@ -385,26 +411,27 @@ static long vioblk_writeat (struct io * io, unsigned long long pos, const void *
 
     // sleep until used ring shows the descriptor is completed (will be updated by device)
     int pie = disable_interrupts();
-    while (dev->vq.last_used_idx != dev->vq.used.idx) {
-        restore_interrupts(pie);
-
+    while (dev->vq.last_used_idx == dev->vq.used.idx) {
             // wait for thread wake
             condition_wait(&dev->data_cond);
-
-        pie = disable_interrupts();
     }
+    
     restore_interrupts(pie);
     __sync_synchronize();
 
     // check the status byte in descriptor #3
     if (status != 0){
     kfree(req); // freeing request
+    lock_release(&dev->virtq_lock); //releasing lock
         return -EIO;
     }
 
     kfree(req); // freeing request
 
+    pie = disable_interrupts();
     memset(&dev->vq.desc[0], 0, sizeof(dev->vq.desc[0]) * 3); //zeroing out descriptors after one request
+    restore_interrupts(pie);
+    lock_release(&dev->virtq_lock); //releasing lock
 
     return len;
 }
@@ -438,7 +465,7 @@ static int vioblk_cntl (struct io * io, int cmd, void * arg) {
 }
 
 static void vioblk_isr(int srcno, void * aux) {
-    kprintf("ISR called\n");
+    debug("ISR called\n");
     // retreiving the vioblk device
     struct vioblk_device *dev = (struct vioblk_device *)aux; 
 
@@ -455,17 +482,15 @@ static void vioblk_isr(int srcno, void * aux) {
     int pie = disable_interrupts();
     while (dev->vq.last_used_idx != dev->vq.used.idx) {
         uint16_t used_idx = dev->vq.last_used_idx % 3;
-        uint32_t desc_id = dev->vq.used.ring[used_idx].id;
-
-        kprintf("Used descriptor ID: %d\n", desc_id);
-
+        uint16_t desc_id = dev->vq.used.ring[used_idx].id;
+        assert(desc_id == 0); // or log it
         dev->vq.last_used_idx++;
     }
     restore_interrupts(pie);
 
     // wake up the thread waiting on the request
-    kprintf("Calling condition_broadcast...\n");
+    debug("Calling condition_broadcast...\n");
     condition_broadcast(&dev->data_cond);
-    kprintf("Leaving condition_broadcast...\n");
+    debug("Leaving condition_broadcast...\n");
 }
 
