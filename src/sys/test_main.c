@@ -37,7 +37,7 @@ void dump_buffer(const char *label, const void *buf, size_t len) {
     }
 }
 
-void basic_test_thread(void) {
+void basic_test(void) {
     struct io *blkio;
     int result = open_device("vioblk", 0, &blkio);
     assert(result == 0);
@@ -64,7 +64,7 @@ void basic_test_thread(void) {
     thread_exit();  // properly terminate the thread
 }
 
-void complex_test_thread(void) {
+void complex_test(void) {
     struct io *blkio;
     int result = open_device("vioblk", 0, &blkio);
     assert(result == 0);
@@ -136,54 +136,44 @@ void vioblk_multi_rw_test(void) {
     struct io *blkio;
     int result = open_device("vioblk", 0, &blkio);
     assert(result == 0);
-    kprintf("✅ Opened vioblk device\n");
+    kprintf("Opened vioblk device\n");
 
     unsigned long blksz;
     result = ioctl(blkio, GETBLKSZ, &blksz);
     assert(result == 0);
     assert(blksz == 512);
-    kprintf("✅ Block size = %lu\n", blksz);
+    kprintf("Block size = %lu\n", blksz);
 
     unsigned long long capacity;
     result = ioctl(blkio, GETEND, &capacity);
     assert(result == 0);
-    assert(capacity >= blksz * 4); // test needs 4 blocks minimum
-    kprintf("✅ Total capacity = %llu\n", capacity);
+    assert(capacity >= 4 * blksz); // test needs 4 blocks minimum
+    kprintf("Total capacity = %llu\n", capacity);
 
-    // Buffers
-    char wbufA[512], rbufA[512];
-    char wbufB[512], rbufB[512];
-    char wbufC[512], rbufC[512];
+    // Use a buffer of 2 blocks = 1024 bytes
+    const int block_count = 2;
+    const int bufsize = blksz * block_count;
 
-    memset(wbufA, 'A', 512);
-    memset(wbufB, 'B', 512);
-    memset(wbufC, 'C', 512);
-    memset(rbufA, 0, 512);
-    memset(rbufB, 0, 512);
-    memset(rbufC, 0, 512);
+    char wbuf[bufsize], rbuf[bufsize];
+    memset(wbuf, 'Z', bufsize); // fill with 'Z'
+    memset(rbuf, 0, bufsize);   // zero-out
 
-    // Write to 3 blocks
-    result = iowriteat(blkio, 0 * blksz, wbufA, blksz); assert(result == blksz);
-    result = iowriteat(blkio, 1 * blksz, wbufB, blksz); assert(result == blksz);
-    result = iowriteat(blkio, 2 * blksz, wbufC, blksz); assert(result == blksz);
-    kprintf("✅ Multiple writes succeeded\n");
+    // Perform single multi-block write
+    kprintf("Writing %d bytes starting at block 2...\n", bufsize);
+    result = iowriteat(blkio, 2 * blksz, wbuf, bufsize);
+    assert(result == bufsize);
 
-    // Read from same 3 blocks
-    result = ioreadat(blkio, 0 * blksz, rbufA, blksz); assert(result == blksz);
-    result = ioreadat(blkio, 1 * blksz, rbufB, blksz); assert(result == blksz);
-    result = ioreadat(blkio, 2 * blksz, rbufC, blksz); assert(result == blksz);
-    kprintf("✅ Multiple reads succeeded\n");
+    // Perform single multi-block read
+    kprintf("Reading %d bytes back from block 2...\n", bufsize);
+    result = ioreadat(blkio, 2 * blksz, rbuf, bufsize);
+    assert(result == bufsize);
 
-    // Check correctness
-    assert(memcmp(wbufA, rbufA, blksz) == 0);
-    assert(memcmp(wbufB, rbufB, blksz) == 0);
-    assert(memcmp(wbufC, rbufC, blksz) == 0);
-    kprintf("✅ Data read back matches written data on all blocks!\n");
+    // Validate the round-trip
+    assert(memcmp(wbuf, rbuf, bufsize) == 0);
+    kprintf("Multi-block read/write verification passed!\n");
 
     ioclose(blkio);
-    kprintf("🎉 MULTI RW TEST PASSED!\n");
-
-    thread_exit(); // end the test thread
+    kprintf("<<<<< ===== MULTI RW TEST PASSED! ===== >>>>>\n");
 }
 
 void main(void) {
@@ -204,11 +194,8 @@ void main(void) {
 
     uart_attach((void*)UART0_MMIO_BASE, UART0_INTR_SRCNO);
 
-    //  Spawn the complex test as a thread!
-    thread_spawn("vioblk_test", vioblk_multi_rw_test);
+    //run test
+    vioblk_multi_rw_test();
 
-    // Let the thread run
-    // while (1) {
-         thread_yield();
-    // }
+
 }

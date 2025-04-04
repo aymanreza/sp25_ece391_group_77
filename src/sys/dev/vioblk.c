@@ -182,7 +182,7 @@ void vioblk_attach(volatile struct virtio_mmio_regs * regs, int irqno) {
     assert (((blksz - 1) & blksz) == 0);
 
     // FIX ME
-
+    regs->status |=  VIRTIO_STAT_FEATURES_OK; //not accepting new feature bits  
     struct vioblk_device * dev = kcalloc(1, sizeof(*dev)); // creating a new block device
     dev->regs = regs;
     dev->irqno = irqno;
@@ -217,15 +217,15 @@ void vioblk_attach(volatile struct virtio_mmio_regs * regs, int irqno) {
     //register the ISR
     enable_intr_source(dev->irqno, VIOBLK_INTR_PRIO, vioblk_isr, dev);
 
-    // Mark the driver as ready 
-    regs->status |= VIRTIO_STAT_DRIVER_OK;
-    __sync_synchronize();
-
     //register the device
     dev->instno = register_device(VIOBLK_NAME, vioblk_open, dev);
 
     condition_init(&dev->data_cond, "vioblk_data_cond"); //initializing data condition
     lock_init(&dev->virtq_lock); //initializing lock
+
+    // Mark the driver as ready 
+    regs->status |= VIRTIO_STAT_DRIVER_OK;
+    __sync_synchronize();
 }
 
 static int vioblk_open(struct io ** ioptr, void * aux) {
@@ -267,173 +267,173 @@ static void vioblk_close(struct io * io) {
     debug("Device successfully closed in vioblk_close \n");
 }
 
-static long vioblk_readat (struct io * io, unsigned long long pos, void * buf, long bufsz) {
-    // checking validity of the arguments
+static long vioblk_readat(struct io * io, unsigned long long pos, void * buf, long bufsz) {
+    // sanity checks
     assert(io != NULL && buf != NULL && bufsz > 0);
 
-    // getting the vioblk device using io pointer
-    struct vioblk_device * dev = (struct vioblk_device *)((char*)io - offsetof(struct vioblk_device, io)); //retreiving virtio device
+    // recover the device pointer from the io struct
+    struct vioblk_device * dev = (struct vioblk_device *)((char*)io - offsetof(struct vioblk_device, io));
 
-    // ensuring 512 byte alignment
-    if (pos % dev->blksz != 0 || bufsz % dev->blksz != 0)
-    return -EINVAL;
+    // enforce block alignment 
+    if (pos % dev->blksz != 0 || bufsz % dev->blksz != 0) return -EINVAL;
+    if ((pos + bufsz) > (dev->capacity * dev->blksz)) return -EIO;
 
-    // checking bounds
-    if ((pos + bufsz) > (dev->capacity * dev->blksz))
-    return -EIO;
+    // getting lock to synchronize access to the virtqueue
+    lock_acquire(&dev->virtq_lock);
 
-    lock_acquire(&dev->virtq_lock); // acquiring lock
+    long bytes_read = 0;
+    uint8_t *buf_ptr = (uint8_t *)buf;
+    unsigned long long cur_pos = pos;
 
-    // creating request for the virtqueue
+    // read in block-sized chunks
+    while (bytes_read < bufsz) {
+        struct virtio_blk_req *req = kcalloc(1, sizeof(struct virtio_blk_req));
+        if (!req) {
+            lock_release(&dev->virtq_lock);
+            return -ENOMEM;
+        }
 
-    struct virtio_blk_req *req = kcalloc(1, sizeof(struct virtio_blk_req)); 
-    if (!req){
-        lock_release(&dev->virtq_lock); //releasing lock
-        return -ENOMEM;
+        // Set up the request
+        req->type = VIRTIO_BLK_T_IN;
+        req->reserved = 0;
+        req->sector = cur_pos / dev->blksz;
+
+        uint8_t status = 0;
+
+        // Descriptor 0: request header
+        dev->vq.desc[0].addr = (uint64_t)(uintptr_t)req;
+        dev->vq.desc[0].flags = VIRTQ_DESC_F_NEXT;
+        dev->vq.desc[0].len = sizeof(*req);
+        dev->vq.desc[0].next = 1;
+
+        // Descriptor 1: data buffer to fill (marked writable)
+        dev->vq.desc[1].addr = (uint64_t)(uintptr_t)(buf_ptr + bytes_read);
+        dev->vq.desc[1].flags = VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_NEXT;
+        dev->vq.desc[1].len = dev->blksz;
+        dev->vq.desc[1].next = 2;
+
+        // Descriptor 2: status byte (writable by device)
+        dev->vq.desc[2].addr = (uint64_t)(uintptr_t)&status;
+        dev->vq.desc[2].flags = VIRTQ_DESC_F_WRITE;
+        dev->vq.desc[2].len = 1;
+        dev->vq.desc[2].next = -1;
+
+        // adding descriptor chain to available ring
+        dev->vq.avail.ring[dev->vq.avail.idx % 3] = 0;
+        __sync_synchronize();
+        dev->vq.avail.idx++;
+        __sync_synchronize();
+
+        // Notify the device
+        virtio_notify_avail(dev->regs, 0);
+
+        // wait for device to update
+        int pie = disable_interrupts();
+        while (dev->vq.used.idx != dev->vq.avail.idx) {
+            condition_wait(&dev->data_cond);
+        }
+        restore_interrupts(pie);
+
+        // check status
+        if (status != 0) {
+            kfree(req); //freeing request from memory
+            lock_release(&dev->virtq_lock); //releasing lock
+            return -EIO;
+        }
+
+        kfree(req);
+        memset(&dev->vq.desc[0], 0, sizeof(dev->vq.desc[0]) * 3); //resetting descriptors after completion
+
+        // Update counters for next block
+        bytes_read += dev->blksz; //next position caculation for large reads
+        cur_pos += dev->blksz;
     }
-    req->type = VIRTIO_BLK_T_IN; 
-    req->reserved = 0;
-    req->sector = pos / dev->blksz;
 
-    uint8_t status = 0;
-
-    // filling in descriptor #1, the request header (16 bytes)
-    dev->vq.desc[0].addr = (uint64_t)(uintptr_t)req;
-    dev->vq.desc[0].flags = VIRTQ_DESC_F_NEXT;
-    dev->vq.desc[0].len =  sizeof(*req);
-    dev->vq.desc[0].next = 1; // next is desc[1]
-
-    // filling in descriptor #2, the data buffer (512 bytes)
-    dev->vq.desc[1].addr = (uint64_t)(uintptr_t)buf;
-    dev->vq.desc[1].flags = VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_NEXT;
-    dev->vq.desc[1].len = bufsz;
-    dev->vq.desc[1].next = 2;
-
-    // filling in descriptor #3, the status (1 byte)
-    dev->vq.desc[2].addr = (uint64_t)(uintptr_t)&status;
-    dev->vq.desc[2].flags = VIRTQ_DESC_F_WRITE;
-    dev->vq.desc[2].len = 1;
-    dev->vq.desc[2].next = -1;
-  
-    // submitting the descriptor chain
-    uint16_t avail_idx = dev->vq.avail.idx % 3;
-    dev->vq.avail.ring[avail_idx] = 0; // descriptor chain starts at index 0
-    __sync_synchronize();
-    dev->vq.avail.idx++;
-    __sync_synchronize();
-
-    // notify the device
-    virtio_notify_avail(dev->regs, 0);
-
-    // sleep until used ring shows the descriptor is completed (will be updated by device)
-    int pie = disable_interrupts();
-    while (dev->vq.last_used_idx == dev->vq.used.idx) {
-        // wait for thread wake
-        condition_wait(&dev->data_cond);
-
-    }
-    restore_interrupts(pie);
-    __sync_synchronize();
-
-    // check the status byte in descriptor #2
-    if (status != 0){
-        kfree(req); //freeing request
-        lock_release(&dev->virtq_lock); //releasing lock
-        return -EIO;
-    }
-    kfree(req);
-
-    pie = disable_interrupts();
-    memset(&dev->vq.desc[0], 0, sizeof(dev->vq.desc[0]) * 3); //zeroing out descriptors after one request
-    restore_interrupts(pie);
-
-    lock_release(&dev->virtq_lock); //releasing lock
-
-    return bufsz;
+    lock_release(&dev->virtq_lock);
+    return bytes_read;
 }
 
 static long vioblk_writeat (struct io * io, unsigned long long pos, const void * buf, long len) {
-    // checking validity of the arguments
+    //sainty checks
     assert(io != NULL && buf != NULL && len > 0);
 
-    // getting the vioblk device using io pointer
-    struct vioblk_device * dev = (struct vioblk_device *)((char*)io - offsetof(struct vioblk_device, io)); //retreiving virtio device
+    //retrieving device from io pointer
+    struct vioblk_device * dev = (struct vioblk_device *)((char*)io - offsetof(struct vioblk_device, io));
 
-    // ensuring 512 byte alignment
-    if (pos % dev->blksz != 0 || len % dev->blksz != 0)
-    return -EINVAL;
+    // enforce alignment and bounds
+    if (pos % dev->blksz != 0 || len % dev->blksz != 0) return -EINVAL;
+    if ((pos + len) > (dev->capacity * dev->blksz)) return -EIO;
 
-    // checking bounds
-    if ((pos + len) > (dev->capacity * dev->blksz))
-    return -EIO;
+    //acquire lock
+    lock_acquire(&dev->virtq_lock);
 
-    lock_acquire(&dev->virtq_lock); // acquiring lock
+    long bytes_written = 0;
+    uint8_t *buf_ptr = (uint8_t *)buf;
+    unsigned long long cur_pos = pos;
 
-    // creating request for the virtqueue
-    struct virtio_blk_req *req = kcalloc(1, sizeof(struct virtio_blk_req)); 
-    if (!req){
-        lock_release(&dev->virtq_lock); //releasing lock
-        return -ENOMEM;
-    }
-    req->type = VIRTIO_BLK_T_OUT; 
-    req->reserved = 0;
-    req->sector = pos / dev->blksz;
+    // write in block-sized chunks
+    while (bytes_written < len) {
+        struct virtio_blk_req *req = kcalloc(1, sizeof(struct virtio_blk_req));
+        if (!req) { //no request
+            lock_release(&dev->virtq_lock); //release lock
+            return -ENOMEM;
+        }
 
-    uint8_t status = 0; // initilizing the status byte for the descriptor
+        req->type = VIRTIO_BLK_T_OUT; //we want to write out of the buffer
+        req->reserved = 0;
+        req->sector = cur_pos / dev->blksz;
 
-    // filling in descriptor #1, the request header (16 bytes)
-    dev->vq.desc[0].addr = (uint64_t)(uintptr_t)req;
-    dev->vq.desc[0].flags = VIRTQ_DESC_F_NEXT;
-    dev->vq.desc[0].len =  sizeof(*req);
-    dev->vq.desc[0].next = 1; // next is desc[1]
+        uint8_t status = 0;
 
-    // filling in descriptor #2, the data buffer (512 bytes)
-    dev->vq.desc[1].addr = (uint64_t)(uintptr_t)buf;
-    dev->vq.desc[1].flags = VIRTQ_DESC_F_NEXT;
-    dev->vq.desc[1].len = len;
-    dev->vq.desc[1].next = 2;
+        // Descriptor 0: request header
+        dev->vq.desc[0].addr = (uint64_t)(uintptr_t)req;
+        dev->vq.desc[0].flags = VIRTQ_DESC_F_NEXT;
+        dev->vq.desc[0].len = sizeof(*req);
+        dev->vq.desc[0].next = 1;
 
-    // filling in descriptor #3, the status (1 byte)
-    dev->vq.desc[2].addr = (uint64_t)(uintptr_t)&status;
-    dev->vq.desc[2].flags = VIRTQ_DESC_F_WRITE;
-    dev->vq.desc[2].len = 1;
-    dev->vq.desc[2].next = -1;
+        // Descriptor 1: data buffer to write from
+        dev->vq.desc[1].addr = (uint64_t)(uintptr_t)(buf_ptr + bytes_written);
+        dev->vq.desc[1].flags = VIRTQ_DESC_F_NEXT;
+        dev->vq.desc[1].len = dev->blksz;
+        dev->vq.desc[1].next = 2;
 
-    // submitting the descriptor chain
-    uint16_t avail_idx = dev->vq.avail.idx % 3;
-    dev->vq.avail.ring[avail_idx] = 0; // descriptor chain starts at index 0
-    __sync_synchronize();
-    dev->vq.avail.idx++;
-    __sync_synchronize();
+        // Descriptor 2: status byte
+        dev->vq.desc[2].addr = (uint64_t)(uintptr_t)&status;
+        dev->vq.desc[2].flags = VIRTQ_DESC_F_WRITE;
+        dev->vq.desc[2].len = 1;
+        dev->vq.desc[2].next = -1;
 
-    // notify the device
-    virtio_notify_avail(dev->regs, 0);
+        // adding descriptor chain to available ring
+        dev->vq.avail.ring[dev->vq.avail.idx % 3] = 0;
+        __sync_synchronize();
+        dev->vq.avail.idx++;
+        __sync_synchronize();
 
-    // sleep until used ring shows the descriptor is completed (will be updated by device)
-    int pie = disable_interrupts();
-    while (dev->vq.last_used_idx == dev->vq.used.idx) {
-            // wait for thread wake
+        // notify the device
+        virtio_notify_avail(dev->regs, 0);
+
+        // wait for write to complete
+        int pie = disable_interrupts();
+        while (dev->vq.used.idx != dev->vq.avail.idx) {
             condition_wait(&dev->data_cond);
+        }
+        restore_interrupts(pie);
+
+        if (status != 0) {
+            kfree(req);//freeing request from memory
+            lock_release(&dev->virtq_lock);
+            return -EIO;
+        }
+
+        kfree(req); //freeing request from memory
+        memset(&dev->vq.desc[0], 0, sizeof(dev->vq.desc[0]) * 3); //resetting descriptors after completion
+
+        bytes_written += dev->blksz; //next position caculation for large reads
+        cur_pos += dev->blksz;
     }
-    
-    restore_interrupts(pie);
-    __sync_synchronize();
 
-    // check the status byte in descriptor #3
-    if (status != 0){
-    kfree(req); // freeing request
     lock_release(&dev->virtq_lock); //releasing lock
-        return -EIO;
-    }
-
-    kfree(req); // freeing request
-
-    pie = disable_interrupts();
-    memset(&dev->vq.desc[0], 0, sizeof(dev->vq.desc[0]) * 3); //zeroing out descriptors after one request
-    restore_interrupts(pie);
-    lock_release(&dev->virtq_lock); //releasing lock
-
-    return len;
+    return bytes_written; 
 }
 
 static int vioblk_cntl (struct io * io, int cmd, void * arg) {
@@ -465,6 +465,7 @@ static int vioblk_cntl (struct io * io, int cmd, void * arg) {
 }
 
 static void vioblk_isr(int srcno, void * aux) {
+    int pie = disable_interrupts();
     debug("ISR called\n");
     // retreiving the vioblk device
     struct vioblk_device *dev = (struct vioblk_device *)aux; 
@@ -473,24 +474,26 @@ static void vioblk_isr(int srcno, void * aux) {
     uint32_t isr_status = dev->regs->interrupt_status;
     if (isr_status == 0) {
         // no interrupt to acknowledge
+        restore_interrupts(pie);
         return;
     }
     // acknowledge the interrupt at the device level
     dev->regs->interrupt_ack = isr_status;
 
     // process completed requests (advance used index)
-    int pie = disable_interrupts();
-    while (dev->vq.last_used_idx != dev->vq.used.idx) {
-        uint16_t used_idx = dev->vq.last_used_idx % 3;
-        uint16_t desc_id = dev->vq.used.ring[used_idx].id;
-        assert(desc_id == 0); // or log it
-        dev->vq.last_used_idx++;
+    if (dev->vq.last_used_idx != dev->vq.used.idx) {
+        debug("condition broadcasted\n");
+        dev->vq.last_used_idx = dev->vq.used.idx;
+        condition_broadcast(&dev->data_cond);
     }
-    restore_interrupts(pie);
+
+    // // read interrupt status
+    // uint32_t isr_status = dev->regs->interrupt_status;
+    // // acknowledge the interrupt at the device level
+    // dev->regs->interrupt_ack = isr_status;
 
     // wake up the thread waiting on the request
-    debug("Calling condition_broadcast...\n");
-    condition_broadcast(&dev->data_cond);
-    debug("Leaving condition_broadcast...\n");
+    restore_interrupts(pie);
+    debug("ISR end\n");
 }
 
