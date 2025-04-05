@@ -74,7 +74,7 @@ int fsflush(void)
 
 int ktfs_read_inode(uint16_t inum, struct ktfs_inode *out) {
     // checking validity of the arguments
-    if (!out || inum == 0) return -EINVAL;
+    if (!out) return -EINVAL;
 
     //calculating the indexes to retricing the correct inode block
     const int inodes_per_block = KTFS_BLKSZ / KTFS_INOSZ; // our case we have 16 inodes per block
@@ -83,7 +83,7 @@ int ktfs_read_inode(uint16_t inum, struct ktfs_inode *out) {
 
     // buffer to fill using read
     char buf[KTFS_BLKSZ];
-    int ret = ioreadat(fs.bdev, block_idx, buf, KTFS_BLKSZ);
+    int ret = ioreadat(fs.bdev, block_idx * KTFS_BLKSZ, buf, KTFS_BLKSZ);
     if (ret != KTFS_BLKSZ) return -EIO; //ioread failed
 
     // copy the buffer data into the inode data structure
@@ -95,7 +95,7 @@ int ktfs_read_data_block(uint32_t blockno, void* buf) {
     if (!buf) return -EINVAL; // invalid arguments
 
     uint32_t block_idx = 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + blockno; //index to find destred data block
-    return ioreadat(fs.bdev, block_idx, buf, KTFS_BLKSZ); // read and fill into the buffer
+    return ioreadat(fs.bdev, block_idx * KTFS_BLKSZ, buf, KTFS_BLKSZ); // read and fill into the buffer
 }
 
 int get_blocknum_for_offset(struct ktfs_inode *inode, uint32_t file_block_index, uint32_t *out_blockno) {
@@ -186,8 +186,7 @@ int ktfs_mount(struct io * io) {
     // sanity check to make sure the super block is not unitilized
     if (fs.sb.block_count == 0 ||
         fs.sb.bitmap_block_count == 0 ||
-        fs.sb.inode_block_count == 0 ||
-        fs.sb.root_directory_inode == 0) {
+        fs.sb.inode_block_count == 0) {
         return -EINVAL;
     }
 
@@ -209,7 +208,7 @@ int ktfs_open(const char * name, struct io ** ioptr) {
  
 
     for (int i = 0; i < KTFS_NUM_DIRECT_DATA_BLOCKS; i++) { //each direct data block pointer has own data block of dentries
-        if (root_inode.block[i] == 0) continue; // skipping unused blocks
+        if (root_inode.block[i] == 0 && root_inode.block[i] != 0) continue; // skipping unused blocks
 
         ret = ktfs_read_data_block(root_inode.block[i], dentries);
         if (ret < 0) return ret; //fail

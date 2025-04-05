@@ -108,5 +108,5 @@ test-main.elf: $(OBJS) test_main.o blob.o
 run-test: test-main.elf
 	$(QEMU) $(QEMUOPTS) -m 8M -kernel $<
 
-run-gdb: test-main.elf
+run-gdb: kernel.elf
 	$(QEMU) $(QEMUOPTS) -m 8M -kernel $< -s -S

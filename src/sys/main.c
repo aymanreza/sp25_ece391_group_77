@@ -14,6 +14,27 @@
 
 #define VIRTIO_MMIO_STEP (VIRTIO1_MMIO_BASE-VIRTIO0_MMIO_BASE)
 extern char _kimg_end[]; 
+struct io * global_termio;
+
+
+static void trek_thrfn(void) {
+    void (*entry)(struct io *);
+    struct io *trekio;
+    int result;
+
+    // Open the trek file again inside the thread
+    result = fsopen("trek", &trekio);
+    assert(result == 0);
+
+    // Load the ELF and get entry point
+    result = elf_load(trekio, (void (**)(void)) &entry);
+    assert(result == 0);
+
+    // Call the user-level entry with the terminal IO
+    entry(global_termio);
+}
+
+
 void main(void) {
     struct io *blkio;
     struct io *termio;
@@ -21,7 +42,7 @@ void main(void) {
     int result;
     int i;
     int tid;
-    void (*exe_entry)(struct io*);
+    // void (*exe_entry)(struct io*);
 
     console_init();
     devmgr_init();
@@ -32,7 +53,7 @@ void main(void) {
     uart_attach((void*)UART1_MMIO_BASE, UART0_INTR_SRCNO+1);
     rtc_attach((void*)RTC_MMIO_BASE);
 
-    int trektid;
+    // int trektid;
     
     for (i = 0; i < 8; i++) {
         virtio_attach ((void*)VIRTIO0_MMIO_BASE + i*VIRTIO_MMIO_STEP, VIRTIO0_INTR_SRCNO + i);
@@ -64,25 +85,17 @@ void main(void) {
 
     // TODO:
     // 1. Load the trek file into memory
-
     // 2. Verify the loading of the file into memory
+    global_termio = termio;
 
     // 3. Run trek on a new thread
-    trektid = thread_spawn("trek", trek_thrfn);
+    tid = thread_spawn("trek", trek_thrfn);
 
     // 4. Verify that the thread was able to run properly, if it was have the main thread wait for trek to finish
-    assert (0 < trektid);
+    // assert (0 < trektid);
     
+    assert(tid > 0);
     thread_join(0);
 
 }
 
-void trek_thrfn(void) {
-    extern void trek_start(struct io * io);
-    struct io * termio;
-    int result;
-
-    result = open_device("uart", 1, &termio);
-    assert (result == 0);
-    trek_start(termio);
-}
