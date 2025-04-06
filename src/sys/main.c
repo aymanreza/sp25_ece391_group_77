@@ -14,18 +14,6 @@
 
 #define VIRTIO_MMIO_STEP (VIRTIO1_MMIO_BASE-VIRTIO0_MMIO_BASE)
 extern char _kimg_end[]; 
-
-static void (*trek_start)(void) = NULL;
-
-static void trek_thrfn(void) {
-    struct io *termio;
-    int result;
-
-    result = open_device("uart", 1, &termio);
-    assert(result == 0);
-    ((void (*)(struct io *))trek_start)(termio); // recasting trek_start to match io input
-}
-
 void main(void) {
     struct io *blkio;
     struct io *termio;
@@ -73,27 +61,14 @@ void main(void) {
     }
 
     // TODO:
-    // 1. Load the trek file into memory
+    // 1. Load the trek file into memory
     result = elf_load(trekio, &exe_entry);
-    if (result < 0) {
-        kprintf("Error: %d\n", result);
-        panic("Failed to load trek file\n");
-    }
-    // 2. Verify the loading of the file into memory
-    kprintf("Trek loaded at entry point 0x%lx\n", (unsigned long)exe_entry);
-    trek_start = exe_entry;  // saving the loaded entry point in the global variable
-    // 3. Run trek on a new thread
-    tid = thread_spawn("trek", trek_thrfn);
-    if (tid < 0) {
-         kprintf("Error: %d\n", tid);
-         panic("Failed to spawn trek thread\n");
-    }
-    kprintf("Trek thread spawned successfully\n");
-    // 4. Verify that the thread was able to run properly, if it was have the main thread wait for trek to finish
-    result = thread_join(tid);
-    if (result < 0) {
-        kprintf("Error: %d\n", result);
-        panic("Error joining trek thread\n");
-    }
-    kprintf("Trek thread finished successfully.\n");
+    // 2. Verify the loading of the file into memory
+    assert(result == 0);
+    // 3. Run trek on a new thread
+    result = thread_spawn("trek", exe_entry, termio);
+    
+    // 4. Verify that the thread was able to run properly, if it was have the main thread wait for trek to finish
+    assert(result > 0);
+    thread_join(0);
 }
