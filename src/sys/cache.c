@@ -23,6 +23,7 @@ struct cache_entry {
 struct cache {
     struct io *bdev;
     struct cache_entry entries[CACHE_CAPACITY]; // capacity is 64
+    struct lock cache_lock;
 };
 
 
@@ -34,6 +35,7 @@ int create_cache(struct io * bkgio, struct cache ** cptr) {
     struct cache *cache = kcalloc(1, sizeof(struct cache));
     if (!cache) return -ENOMEM;
 
+    lock_init(&cache->cache_lock); //initililizing the lvok
     cache->bdev = ioaddref(bkgio);  // Store backing device and increment ref count
 
     // Initialize cache entries
@@ -53,6 +55,8 @@ int cache_get_block(struct cache * cache, unsigned long long pos, void ** pptr) 
     if (!cache || !pptr || pos % CACHE_BLKSZ != 0)
         return -EINVAL;
 
+    lock_acquire(&cache->cache_lock); //aqcuiring lock
+
     uint64_t blocknum = pos / CACHE_BLKSZ; // getting block number (pos is multiple of 512)
 
     // look for block cache
@@ -60,6 +64,7 @@ int cache_get_block(struct cache * cache, unsigned long long pos, void ** pptr) 
         struct cache_entry *entry = &cache->entries[i];
         if (entry->valid && entry->blocknum == blocknum) { // found block number
             *pptr = entry->data; // return pointer to the correct block
+            lock_release(&cache->cache_lock); //releasing lock
             return 0;
         }
     }
@@ -81,13 +86,15 @@ int cache_get_block(struct cache * cache, unsigned long long pos, void ** pptr) 
     // if dirty, flush to disk
     if (entry->valid && entry->dirty) {
         int ret = iowriteat(cache->bdev, entry->blocknum * CACHE_BLKSZ, entry->data, CACHE_BLKSZ);
-        if (ret < 0) return ret; // fail
+        if (ret < 0) {lock_release(&cache->cache_lock); return ret;} // fail
     }
 
     // read new block from disk
     int ret = ioreadat(cache->bdev, pos, entry->data, CACHE_BLKSZ);
-    if (ret != CACHE_BLKSZ)
+    if (ret != CACHE_BLKSZ){
+        lock_release(&cache->cache_lock);
         return -EIO;
+    }
 
     // update cache entry
     entry->valid = CACHE_VALID;
@@ -95,13 +102,14 @@ int cache_get_block(struct cache * cache, unsigned long long pos, void ** pptr) 
     entry->blocknum = blocknum;
 
     *pptr = entry->data; // return pointer to the correct data block
+    lock_release(&cache->cache_lock); //releasing lock
     return 0;
 }
 
 void cache_release_block(struct cache * cache, void * pblk, int dirty) {
     // validating arguments
     if (!cache || !pblk) return;
-
+    lock_acquire(&cache->cache_lock); //aqcuiring lock
     // going through each entry
     for (int i = 0; i < CACHE_CAPACITY; i++) {
         struct cache_entry *entry = &cache->entries[i];
@@ -113,12 +121,13 @@ void cache_release_block(struct cache * cache, void * pblk, int dirty) {
             return;
         }
     }
+    lock_release(&cache->cache_lock);
 }
 
 int cache_flush(struct cache * cache) {
     // validating arguments
     if (!cache || !cache->bdev) return -EINVAL;
-
+    lock_acquire(&cache->cache_lock); //aqcuiring lock
     // going through each entry 
     for (int i = 0; i < CACHE_CAPACITY; i++) {
         struct cache_entry *entry = &cache->entries[i];
@@ -129,12 +138,14 @@ int cache_flush(struct cache * cache) {
                                 entry->data,
                                 CACHE_BLKSZ);
 
-            if (ret != CACHE_BLKSZ) // sanity check if 512 bytes not written
+            if (ret != CACHE_BLKSZ){ // sanity check if 512 bytes not written
+                lock_release(&cache->cache_lock);
                 return -EIO;
+            }
 
             entry->dirty = 0;  // clear dirty bit
         }
     }
-
+    lock_release(&cache->cache_lock);
     return 0;
 }
