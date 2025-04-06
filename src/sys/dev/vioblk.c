@@ -496,4 +496,3 @@ static void vioblk_isr(int srcno, void * aux) {
     restore_interrupts(pie);
     debug("ISR end\n");
 }
-
