@@ -101,89 +101,57 @@ struct elf64_phdr {
 #define  EM_RISCV   243
 
 int elf_load(struct io * elfio, void (**eptr)(void)) {
-    // FIX ME
-    struct elf64_ehdr ehdr; // variable to hold the elfheader
+    struct elf64_ehdr ehdr;
 
-    // moving to the start if the ELF file with offset 0
-    ioseek(elfio, 0);
-
-    // reading elfheader from the elf file into memory
-    // if the read fails, then return an IO error
-    if (ioread(elfio, &ehdr, sizeof(ehdr)) != sizeof(ehdr)) {
+    // Read ELF header at offset 0
+    if (ioreadat(elfio, 0, &ehdr, sizeof(ehdr)) != sizeof(ehdr)) {
         return -EIO;
     }
-    
-    // checking elf magic numbers to ensure that this is an ELF file
-    // if it isn't, return a bad format error
-    if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||ehdr.e_ident[2] != 'L' || ehdr.e_ident[3] != 'F') {
+
+    // Validate ELF magic
+    if (ehdr.e_ident[0] != 0x7F || ehdr.e_ident[1] != 'E' ||
+        ehdr.e_ident[2] != 'L' || ehdr.e_ident[3] != 'F') {
         return -EBADFMT;
     }
 
-    // checking that that the file is 64-bit ELF
-    if (ehdr.e_ident[EI_CLASS] != ELFCLASS64) {
+    // Sanity checks
+    if (ehdr.e_ident[EI_CLASS] != ELFCLASS64 ||
+        ehdr.e_ident[EI_DATA] != ELFDATA2LSB ||
+        ehdr.e_ident[EI_VERSION] != EV_CURRENT ||
+        ehdr.e_machine != EM_RISCV ||
+        ehdr.e_type != ET_EXEC) {
         return -EINVAL;
     }
 
-    // checking that the file is in little-endian format
-    if (ehdr.e_ident[EI_DATA] != ELFDATA2LSB) {
-        return -EINVAL;
-    }
-
-    // checking that the file is using the current ELF version
-    if (ehdr.e_ident[EI_VERSION] != EV_CURRENT) {
-        return -EINVAL;
-    }
-
-    // checking that the file fits riscv architecture
-    if (ehdr.e_machine != EM_RISCV) {
-        return -EINVAL;
-    }
-
-    // checking that the file is executable
-    if (ehdr.e_type != ET_EXEC) {
-        return -EINVAL;
-    }
-
-    // looping through program headers
+    // Load each PT_LOAD segment
     for (int i = 0; i < ehdr.e_phnum; i++) {
         struct elf64_phdr phdr;
 
-        // moving to the offset of the i-th program header
-        ioseek(elfio, ehdr.e_phoff + (i * sizeof(phdr)));
-
-        // reading the program header
-        if (ioread(elfio, &phdr, sizeof(phdr)) != sizeof(phdr)) {
-            return -EIO; // error reading the program header
+        // Read program header directly from correct offset
+        uint64_t phdr_offset = ehdr.e_phoff + (i * sizeof(phdr));
+        if (ioreadat(elfio, phdr_offset, &phdr, sizeof(phdr)) != sizeof(phdr)) {
+            return -EIO;
         }
 
-        // only loading program headers of type PT_LOAD
-        if (phdr.p_type != PT_LOAD) {
-            continue;
-        }
+        if (phdr.p_type != PT_LOAD) continue;
 
-        // making sure all sections of the program are loaded in correct address space
+        // Check memory range is within allowed region
         if (phdr.p_vaddr < 0x80100000 || phdr.p_vaddr + phdr.p_memsz > 0x81000000) {
             return -EINVAL;
         }
 
-        // moving to the program's file offset
-        ioseek(elfio, phdr.p_offset);
-
-        // casting the virtual address to be used as a pointer to memory
-        void *address_ptr = (void *)(uintptr_t)phdr.p_vaddr;
-
-        // reading the programs contents into memory
-        if (ioread(elfio, address_ptr, phdr.p_filesz) != (int)phdr.p_filesz) {
-            return -EIO; // error while reading program data
+        // Read program segment into memory
+        if (ioreadat(elfio, phdr.p_offset, (void*)(uintptr_t)phdr.p_vaddr, phdr.p_filesz)
+            != (int)phdr.p_filesz) {
+            return -EIO;
         }
 
-        // zeroing out uninitialized memory where p_memsz > p_filesz
-        memset((char *)address_ptr + phdr.p_filesz, 0, phdr.p_memsz - phdr.p_filesz);
+        // Zero any additional memory past file size
+        memset((char*)(uintptr_t)phdr.p_vaddr + phdr.p_filesz, 0, phdr.p_memsz - phdr.p_filesz);
     }
 
-    // setting the program's entry pointer
+    // Set the entry point
     *eptr = (void (*)(void))(uintptr_t)ehdr.e_entry;
 
-    // returning 0 on success
     return 0;
 }
