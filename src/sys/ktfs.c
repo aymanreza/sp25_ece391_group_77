@@ -38,8 +38,11 @@ struct ktfs_file {
 struct ktfs {
     struct io *bdev;               // underlying block device
     struct ktfs_superblock sb;     // loaded from block 0
-    // maybe add cache
+    struct cache *cache;
 } fs;
+
+// declaring global filesystem lock
+static struct lock fs_lock;
 
 // INTERNAL FUNCTION DECLARATIONS
 //
@@ -172,6 +175,10 @@ int ktfs_mount(struct io * io) {
     if (!io) 
         return -EINVAL;
 
+    lock_init(&fs_lock); // initializing filesystem lock
+
+    lock_acquire(&fs_lock); // acquiring fs lock before copying from buf
+
     fs.bdev = ioaddref(io); // adding io reference (backing device) and storing into filesystem struct
 
     static char buf[KTFS_BLKSZ]; // buffer to read superblock
@@ -191,6 +198,8 @@ int ktfs_mount(struct io * io) {
         return -EINVAL;
     }
 
+    lock_release(&fs_lock); // releasing filesystem lock before return
+
     // return success
     return 0;
 }
@@ -199,10 +208,16 @@ int ktfs_open(const char * name, struct io ** ioptr) {
     // checking validity of arguments
     if (!name || !ioptr) return -EINVAL; //error, invalid aguments
 
+    // acquiring the filesystem lock
+    lock_acquire(%fs_lock);
+
     // read root inode
     struct ktfs_inode root_inode;
     int ret = ktfs_read_inode(fs.sb.root_directory_inode, &root_inode);
-    if (ret < 0) return ret; //fail
+    if (ret < 0) {
+        lock_release(&fs_lock); // releasing filesystem lock before ret
+        return ret; //fail
+    }
 
     // iterate through direct data blocks to find the file
     struct ktfs_dir_entry dentries[KTFS_BLKSZ / KTFS_DENSZ]; //buffer to store entries in single data block
@@ -212,7 +227,10 @@ int ktfs_open(const char * name, struct io ** ioptr) {
         if (root_inode.block[i] == 0) continue; // skipping unused blocks
 
         ret = ktfs_read_data_block(root_inode.block[i], dentries);
-        if (ret < 0) return ret; //fail
+        if (ret < 0) {
+            lock_release(&fs_lock); // releasing filesystem lock before ret
+            return ret; // fail
+        }
 
         for (int j = 0; j < KTFS_BLKSZ / KTFS_DENSZ; j++) { // looping over each dentry
 
@@ -220,7 +238,10 @@ int ktfs_open(const char * name, struct io ** ioptr) {
                 // found the file, now load its inode
                 struct ktfs_inode file_inode;
                 ret = ktfs_read_inode(dentries[j].inode, &file_inode); // save inode to driver
-                if (ret < 0) return ret; //fail
+                if (ret < 0) {
+                    lock_release(&fs_lock); // releasing filesystem lock before ret
+                    return ret; //fail
+                }
 
                 // allocate a ktfs_file and initialize
                 struct ktfs_file *file = kcalloc(1, sizeof(struct ktfs_file));
@@ -237,19 +258,18 @@ int ktfs_open(const char * name, struct io ** ioptr) {
 
                 ioinit1(&file->io, &file_intf);
                 *ioptr = &file->io; // io pointer to be updated to the file io object we created
+                lock_release(&fs_lock); // releasing filesystem lock before return
                 return 0;
             }
         }
     }
-
-    // File not found
-    return -ENOENT;
+    lock_release(&fs_lock); // releasing filesystem lock before error
+    return -ENOENT; // File not found
 }
 
 void ktfs_close(struct io* io) {
     // checking validity of arguments
-    if (!io) 
-        return; 
+    if (!io) return; 
 
         struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io));
         file->flags = KTFS_FILE_FREE;  // Clear the in-use flag
@@ -263,13 +283,22 @@ void ktfs_close(struct io* io) {
 long ktfs_readat(struct io* io, unsigned long long pos, void * buf, long len) {
     // checking the validity of arguments
     if (!io || !buf || len < 0) return -EINVAL;
+
+    // acquiring filesystem lock before read operations
+    lock_acquire(&fs_lock);
     
     // retreiving file from io pointer
     struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io));
 
     // if file is in use then dont proceed
-    if (file->flags != KTFS_FILE_IN_USE) return -EINVAL;
-    if (pos >= file->size) return 0; //if position is past the filesize, dont proceed
+    if (file->flags != KTFS_FILE_IN_USE) {
+        lock_release(&fs_lock); // releasing filesystem lock before error
+        return -EINVAL;
+    }
+    if (pos >= file->size) {
+        lock_release(&fs_lock); // releasing filesystem lock before return
+        return 0; //if position is past the filesize, dont proceed
+    }
 
     // block len to not read past end of file
     if (pos + len > file->size)
@@ -278,7 +307,10 @@ long ktfs_readat(struct io* io, unsigned long long pos, void * buf, long len) {
     // read the inode for the file to extract info
     struct ktfs_inode inode;
     int ret = ktfs_read_inode(file->inode_num, &inode);
-    if (ret < 0) return ret;
+    if (ret < 0) {
+        lock_release(&fs_lock); // releasing filesystem lock before ret
+        return ret;
+    }
 
     // create out buffer for read
     char blkbuf[KTFS_BLKSZ];
@@ -297,15 +329,21 @@ long ktfs_readat(struct io* io, unsigned long long pos, void * buf, long len) {
 
         uint32_t phys_blockno;
         ret = get_blocknum_for_offset(&inode, block_idx, &phys_blockno); // retriece block number of where data is in file
-        if (ret < 0) return ret; //failed, return
+        if (ret < 0) {
+            lock_release(&fs_lock); // releasing filesystem lock before ret
+            return ret; //failed, return
+        }
 
         ret = ktfs_read_data_block(phys_blockno, blkbuf); // read from the data block (entire 512 bytes)
-        if (ret != KTFS_BLKSZ) return -EIO; // fail
+        if (ret != KTFS_BLKSZ) {
+            lock_release(&fs_lock); // releasing filesystem lock before error
+            return -EIO; // fail
+        }
 
         memcpy((char*)buf + total_read, blkbuf + block_offset, to_copy); // copy data into buffer, by "to_copy" chunks
         total_read += to_copy; // update how much we read
     }
-
+    lock_release(&fs_lock); // releasing filesystem lock before read returns
     return total_read; // return how much we read
 }
 
@@ -328,11 +366,15 @@ int ktfs_cntl(struct io *io, int cmd, void *arg) {
     else return -ENOTSUP;  // nthis is usupported control command
 }
 
-int ktfs_flush(void) {
-    struct cache *global_cache; 
-    if (global_cache==0)
-        return 0; 
-    else
-        return cache_flush(global_cache); 
-    
+int ktfs_flush(void) { 
+    lock_acquire(&fs_lock); // acquiring lock before flushing cache
+    int ret = 0;
+    if (fs.cache == NULL) {
+        ret = 0;
+    } 
+    else {
+        ret = cache_flush(fs.cache);
+    } 
+    lock_release(&fs_lock); // releasing lock before return
+    return ret;
 }
