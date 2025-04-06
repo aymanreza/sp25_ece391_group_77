@@ -62,10 +62,37 @@ void main(void) {
 
     // TODO:
     // 1. Load the trek file into memory
-
+    result = elf_load(trekio, &exe_entry);
+    if (result < 0) {
+        kprintf("Error: %d\n", result);
+        panic("Failed to load trek file\n");
+    }
     // 2. Verify the loading of the file into memory
-
+    kprintf("Trek loaded at entry point 0x%lx\n", (unsigned long)exe_entry);
+    trek_start = exe_entry; // setting global entry for call to thrfn
     // 3. Run trek on a new thread
-
+    tid = thread_spawn("trek", trek_thrfn);
+    if (tid < 0) {
+         kprintf("Error: %d\n", tid);
+         panic("Failed to spawn trek thread\n");
+    }
+    kprintf("Trek thread spawned successfully\n");
     // 4. Verify that the thread was able to run properly, if it was have the main thread wait for trek to finish
+    result = thread_join(tid);
+    if (result < 0) {
+        kprintf("Error: %d\n", result);
+        panic("Error joining trek thread\n");
+    }
+    kprintf("Trek thread finished successfully.\n");
+}
+
+static void (*trek_start)(struct io*) = NULL;
+
+static void trek_thrfn(void) {
+    struct io *termio;
+    int result;
+
+    result = open_device("uart", 1, &termio);
+    assert(result == 0);
+    trek_entry(termio);
 }

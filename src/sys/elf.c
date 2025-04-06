@@ -144,6 +144,9 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
         return -EINVAL;
     }
 
+    // DEBUG: Print ELF entry point
+    kprintf("ELF Entry Point: 0x%lx\n", ehdr.e_entry);
+
     // looping through program headers
     for (int i = 0; i < ehdr.e_phnum; i++) {
         struct elf64_phdr phdr;
@@ -161,10 +164,27 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
             continue;
         }
 
+        // checking that p_filesz does not exceed p_memsz
+        if (phdr.p_filesz > phdr.p_memsz) {
+            return -EINVAL;
+        }
+
+        // protects against arithmetic overflow when computing p_vaddr + p_memsz
+        if (phdr.p_memsz > 0 && phdr.p_vaddr > 0x81000000 - phdr.p_memsz) {
+            return -EINVAL;
+        }
+
         // making sure all sections of the program are loaded in correct address space
         if (phdr.p_vaddr < 0x80100000 || phdr.p_vaddr + phdr.p_memsz > 0x81000000) {
             return -EINVAL;
         }
+
+        // DEBUG: Print load segment details
+        kprintf("LOAD SEGMENT %d:\n", i);
+        kprintf("  vaddr:  0x%lx\n", phdr.p_vaddr);
+        kprintf("  offset: 0x%lx\n", phdr.p_offset);
+        kprintf("  filesz: 0x%lx\n", phdr.p_filesz);
+        kprintf("  memsz:  0x%lx\n", phdr.p_memsz);
 
         // moving to the program's file offset
         ioseek(elfio, phdr.p_offset);
