@@ -123,8 +123,10 @@ extern void condition_wait(struct condition * cond);
 
 extern void condition_broadcast(struct condition * cond);
 
-void lock_init(struct lock * lock);
-void lock_acquire(struct lock * lock);
-void lock_release(struct lock * lock);
+extern void lock_init(struct lock * lock);
+
+extern void lock_acquire(struct lock * lock);
+
+extern void lock_release(struct lock * lock);
 
 #endif // _THREAD_H_

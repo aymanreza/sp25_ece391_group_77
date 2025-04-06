@@ -123,7 +123,30 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
         return -EINVAL;
     }
 
-    // Load each PT_LOAD segment
+    // checking that the file is in little-endian format
+    if (ehdr.e_ident[EI_DATA] != ELFDATA2LSB) {
+        return -EINVAL;
+    }
+
+    // checking that the file is using the current ELF version
+    if (ehdr.e_ident[EI_VERSION] != EV_CURRENT) {
+        return -EINVAL;
+    }
+
+    // checking that the file fits riscv architecture
+    if (ehdr.e_machine != EM_RISCV) {
+        return -EINVAL;
+    }
+
+    // checking that the file is executable
+    if (ehdr.e_type != ET_EXEC) {
+        return -EINVAL;
+    }
+
+    // DEBUG: Print ELF entry point
+    kprintf("ELF Entry Point: 0x%lx\n", ehdr.e_entry);
+
+    // looping through program headers
     for (int i = 0; i < ehdr.e_phnum; i++) {
         struct elf64_phdr phdr;
 
@@ -133,17 +156,42 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
             return -EIO;
         }
 
-        if (phdr.p_type != PT_LOAD) continue;
+        // only loading program headers of type PT_LOAD
+        if (phdr.p_type != PT_LOAD) {
+            continue;
+        }
+
+        // checking that p_filesz does not exceed p_memsz
+        if (phdr.p_filesz > phdr.p_memsz) {
+            return -EINVAL;
+        }
+
+        // protects against arithmetic overflow when computing p_vaddr + p_memsz
+        if (phdr.p_memsz > 0 && phdr.p_vaddr > 0x81000000 - phdr.p_memsz) {
+            return -EINVAL;
+        }
 
         // Check memory range is within allowed region
         if (phdr.p_vaddr < 0x80100000 || phdr.p_vaddr + phdr.p_memsz > 0x81000000) {
             return -EINVAL;
         }
 
-        // Read program segment into memory
-        if (ioreadat(elfio, phdr.p_offset, (void*)(uintptr_t)phdr.p_vaddr, phdr.p_filesz)
-            != (int)phdr.p_filesz) {
-            return -EIO;
+        // DEBUG: Print load segment details
+        kprintf("LOAD SEGMENT %d:\n", i);
+        kprintf("  vaddr:  0x%lx\n", phdr.p_vaddr);
+        kprintf("  offset: 0x%lx\n", phdr.p_offset);
+        kprintf("  filesz: 0x%lx\n", phdr.p_filesz);
+        kprintf("  memsz:  0x%lx\n", phdr.p_memsz);
+
+        // moving to the program's file offset
+        ioseek(elfio, phdr.p_offset);
+
+        // casting the virtual address to be used as a pointer to memory
+        void *address_ptr = (void *)(uintptr_t)phdr.p_vaddr;
+
+        // reading the programs contents into memory
+        if (ioread(elfio, address_ptr, phdr.p_filesz) != (int)phdr.p_filesz) {
+            return -EIO; // error while reading program data
         }
 
         // Zero any additional memory past file size
