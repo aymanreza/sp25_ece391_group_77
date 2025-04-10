@@ -1,8 +1,10 @@
-// heap0.c - Simple, non-freeing heap memory manager
+// heap0.c - Simple, heap memory manager
 //
-// Copyright (c) 2024-2025 University of Illinois
-// SPDX-License-identifier: NCSA
+// Copyright (c) 2024-2025 University of Illinois
+// SPDX-License-identifier: NCSA
 //
+
+
 
 #ifdef HEAP_TRACE
 #define TRACE
@@ -22,70 +24,74 @@
 #include <stdint.h>
 
 #ifndef HEAP_ALIGN
+
 #define HEAP_ALIGN 16
 #endif
 
+
 #define HEAP_ALLOC_MAGIC 0xEAEAEAEA
+
+
 #define HEAP_FREE_MAGIC 0x25252525
 
-// INTERNAL TYPE DEFINITIONS
+// INTERNAL TYPE DEFINITIONS
 //
 
 //        +----------------+----------------+
-//        |  ALLOC_MAGIC   |      size      |
+//        |  ALLOC_MAGIC   |      size      |
 //        +----------------+----------------+
-//        |   size_inv     |    alloc_ra    |
-// ptr -> +----------------+----------------+
-//        |  FREE_MAGIC    |    free_ra     |
+//        |   size_inv     |    alloc_ra    |
+// ptr -> +----------------+----------------+
+//        |  FREE_MAGIC    |    free_ra     |
 //        +---------------------------------+
 //
 
 
-// Header that preceeds each allocated block. Must be a multiple of HEAP_ALIGN.
+// Header that preceeds each allocated block. Must be a multiple of HEAP_ALIGN.
 
 struct heap_alloc_header {
-    uint32_t magic; // HEAP_ALLOC_MAGIC
-    uint32_t size;
-    uint32_t size_inv;
-    uint32_t ra32;    
+    uint32_t magic; ///< HEAP_ALLOC_MAGIC
+    uint32_t size; ///< Size of memory block being allocated
+    uint32_t size_inv; ///< Bitwise not of the size
+    uint32_t ra32;    ///< Caller return address
 };
+
 
 struct heap_free_record {
-    uint32_t magic; // HEAP_FREE_MAGIC
-    uint32_t ra32;
+    uint32_t magic; ///< HEAP_FREE_MAGIC
+    uint32_t ra32; ///< Caller return address
 };
 
-// The ISPOW2 macro evaluates to 1 if its argument is either zero or a power of
-// two. The argument must be an integer type. Cast pointers to uintptr_t to test
+// The ISPOW2 macro evaluates to 1 if its argument is either zero or a power of
+// two. The argument must be an integer type. Cast pointers to uintptr_t to test
 // pointer alignment.
 
+
 #define ISPOW2(n) (((n)&((n)-1)) == 0)
-
-// The ROUND_UP and ROUND_DOWN macros round argument _n_ to a multiple of _k_.
-
-#define ROUND_UP(n,k) (((n)+(k)-1)/(k)*(k))
-#define ROUND_DOWN(n,k) ((n)/(k)*(k))
 
 // INTERNAL GLOBAL VARIABLES
 //
 
-static void * heap_low; // lowest address of heap memory
-static void * heap_end; // end of heap memory
+
+static void * heap_low; // lowest address of heap memory
+
+
+static void * heap_end; // end of heap memory
 
 
 // INTERNAL FUNCTION DEFINITIONS
 //
 
-static void * heap_malloc(size_t size, void * ra);
-static void * heap_calloc(size_t nelts, size_t eltsz, void * ra);
-static void heap_free(void * ptr, void * ra);
+static void * heap_malloc_actual(size_t size, void * ra);
+static void * heap_calloc_actual(size_t nelts, size_t eltsz, void * ra);
+static void heap_free_actual(void * ptr, void * ra);
 
-// EXPORTED GLOBAL VARIABLES
+// EXPORTED GLOBAL VARIABLES
 //
 
 char heap_initialized = 0;
 
-// EXPORTED FUNCTION DEFINITIONS
+// EXPORTED FUNCTION DEFINITIONS
 //
 
 void heap_init(void * start, void * end) {
@@ -94,7 +100,7 @@ void heap_init(void * start, void * end) {
     assert (4 <= HEAP_ALIGN);
     assert (ISPOW2(HEAP_ALIGN));
 
-    // Round start up and end down to a HEAP_ALIGN boundary
+    // Round start up and end down to a HEAP_ALIGN boundary
 
     start = (void*)ROUND_UP((uintptr_t)start, HEAP_ALIGN);
     end = (void*)ROUND_DOWN((uintptr_t)end, HEAP_ALIGN);
@@ -106,22 +112,25 @@ void heap_init(void * start, void * end) {
 }
 
 void * kmalloc(size_t size) {
-    return heap_malloc(size, __builtin_return_address(0));
+    return heap_malloc_actual(size, __builtin_return_address(0));
 }
 
 void * kcalloc(size_t nelts, size_t eltsz) {
-    return heap_calloc(nelts, eltsz, __builtin_return_address(0));
+    return heap_calloc_actual(nelts, eltsz, __builtin_return_address(0));
 }
 
 void kfree(void * ptr) {
-    return heap_free(ptr, __builtin_return_address(0));
+    return heap_free_actual(ptr, __builtin_return_address(0));
 }
 
-// INTERNAL FUNCTION DEFINITIONS
+// INTERNAL FUNCTION DEFINITIONS
 //
 
-void * heap_malloc(size_t size, void * ra) {
+
+void * heap_malloc_actual(size_t size, void * ra) {
     struct heap_alloc_header * hdr;
+    size_t leftover;
+    void * newpage;
     void * ptr;
 
     trace("%s(%zu,ra=%p)", __func__, size, ra);
@@ -134,16 +143,32 @@ void * heap_malloc(size_t size, void * ra) {
     if (HEAP_ALLOC_MAX < size)
         panic("malloc request too large");
     
-    // Check if request is larger than remaining heap (include overflow). If we
-    // implement heap growth (HAVE_MEMORY is defined), ask for another page from
+    // Check if request is larger than remaining heap (include overflow). If we
+    // implement heap growth (HAVE_MEMORY is defined), ask for another page from
     // the page allocator.
 
     if (size + sizeof(struct heap_alloc_header) <= heap_end - heap_low) {
-        // have enough in current pool
+        // have enough in current pool
         ptr = heap_end - size;
         heap_end = (struct heap_alloc_header*)ptr - 1;
-    } else
-        panic("out of memory");
+    } else {
+        // need to get another page
+        if (PAGE_SIZE - sizeof(struct heap_alloc_header) < size)
+            panic(NULL);
+        
+        // Decide whether to switch to the new page or satisfy allocation
+        // request from new page but keep using old heap. Here, _leftover_ is
+        // the space left in the page after we satisfy the allocation request.
+
+        newpage = alloc_phys_page();
+        ptr = newpage + PAGE_SIZE - size;
+        leftover = PAGE_SIZE - size - sizeof(struct heap_alloc_header);
+
+        if (heap_end - heap_low < leftover) {
+            heap_end = ptr - sizeof(struct heap_alloc_header);
+            heap_low = newpage;
+        }
+    }
 
     hdr = (struct heap_alloc_header*)ptr - 1;
     hdr->magic = HEAP_ALLOC_MAGIC;
@@ -155,7 +180,8 @@ void * heap_malloc(size_t size, void * ra) {
     return ptr;
 }
 
-void * heap_calloc(size_t nelts, size_t eltsz, void * ra) {
+
+void * heap_calloc_actual(size_t nelts, size_t eltsz, void * ra) {
     size_t size;
     void * ptr;
 
@@ -164,24 +190,25 @@ void * heap_calloc(size_t nelts, size_t eltsz, void * ra) {
     assert (nelts <= HEAP_ALLOC_MAX / eltsz);
     size = nelts * eltsz;
 
-    ptr = heap_malloc(size, ra);
+    ptr = heap_malloc_actual(size, ra);
     memset(ptr, 0, size);
     return ptr;
 }
 
-void heap_free(void * ptr, void * ra) {
+
+void heap_free_actual(void * ptr, void * ra) {
     struct heap_alloc_header * hdr;
     struct heap_free_record * rec;
 
     trace("%s(%p,ra=%p)", __func__, ptr, ra);
 
-    // Make pointers to alloc header and free record
+    // Make pointers to alloc header and free record
 
     hdr = ptr;
     hdr -= 1;
     rec = ptr;
 
-    // Check integrity
+    // Check integrity
 
     if (hdr->size != ~hdr->size_inv) {
         if (hdr->magic != HEAP_ALLOC_MAGIC)
