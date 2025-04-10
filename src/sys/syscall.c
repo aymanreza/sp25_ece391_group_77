@@ -106,6 +106,29 @@ int validate_vmem(const void *buf, size_t len) {
     return 0;
 }
 
+static int allocate_fd(int fd, struct io * io) {
+    struct process * proc = current_process();
+
+    if (fd == -1) {
+        for (int i = 0; i < PROCESS_IOMAX; i++) {
+            if (proc->iotab[i] == NULL) {
+                proc->iotab[i] = io;
+                return i;
+            }
+        }
+        return -EMFILE; // no free slot
+    }
+
+    if (fd < 0 || fd >= PROCESS_IOMAX)
+        return -EBADFD;
+
+    if (proc->iotab[fd] != NULL)
+        return -EBADFD;
+
+    proc->iotab[fd] = io;
+    return fd;
+}
+
 
 
 int64_t syscall(const struct trap_frame * tfr) {
@@ -183,11 +206,28 @@ int sysusleep(unsigned long us) {
 }
 
 int sysdevopen(int fd, const char * name, int instno) {
-    return 0;
+    if (validate_vstr(name, MAX_PRINT_LEN) < 0)
+        return -EACCESS;
+
+    struct io *io = NULL;
+    int rc = open_device(name, instno, &io); // opening device
+
+    if (rc < 0)
+        return rc;
+
+    return allocate_fd(fd, io); // allocating new fd
 }
 
 int sysfsopen(int fd, const char * name) {
-    return 0; 
+    if (validate_vstr(name, MAX_PRINT_LEN) < 0)
+        return -EACCESS;
+
+    struct io *io;
+    int rc = ktfs_open(name, &io);
+    if (rc < 0)
+        return rc;
+
+    return allocate_fd(fd, io); // allocating new fd
 }
 
 int sysclose(int fd) {
@@ -237,10 +277,16 @@ int syspipe(int * wfdptr, int * rfdptr) {
 }
 
 int sysfscreate(const char* name) {
-    return 0; 
+    if (validate_vstr(name, MAX_PRINT_LEN) < 0) //validating string
+        return -EACCESS;
+
+    return ktfs_create(name);  // calling create from ktfs
 }
 
 int sysfsdelete(const char* name) {
-    return 0; 
+    if (validate_vstr(name, MAX_PRINT_LEN) < 0) //validating string
+        return -EACCESS;
+
+    return ktfs_delete(name);  // calling delete from ktfs
 }
 
