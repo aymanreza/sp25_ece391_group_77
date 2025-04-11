@@ -12,6 +12,7 @@
 #include "console.h"
 #include "assert.h"
 #include "string.h"
+#include "process.h"
 
 #include <stddef.h>
 
@@ -88,5 +89,38 @@ void handle_smode_exception(unsigned int cause, struct trap_frame * tfr) {
 }
 
 void handle_umode_exception(unsigned int cause, struct trap_frame * tfr) {
- 
+    const char * name = NULL;
+    char msgbuf[80];
+    uintptr_t stval = csrr_stval();
+
+    if (0 <= cause && cause < sizeof(excp_names)/sizeof(excp_names[0]))
+		name = excp_names[cause];
+
+        if (name != NULL) {
+            switch (cause) {
+            case RISCV_SCAUSE_ECALL_FROM_UMODE:
+                handle_syscall(tfr);
+                break;
+        
+            case RISCV_SCAUSE_LOAD_PAGE_FAULT:
+            case RISCV_SCAUSE_STORE_PAGE_FAULT:
+            case RISCV_SCAUSE_INSTR_PAGE_FAULT:
+                if (handle_umode_page_fault(tfr, stval) == 0) { //handle page fault
+                    snprintf(msgbuf, sizeof(msgbuf),
+                    "%s at %p for %p in U mode",
+                    name, (void*)tfr->sepc, stval);
+                    return; 
+                }
+                break;
+            default:
+            snprintf(msgbuf, sizeof(msgbuf),
+                    "%s at %p in U mode",
+                    name, (void*)tfr->sepc);
+            }
+        } else {
+            snprintf(msgbuf, sizeof(msgbuf),
+                "Exception %d at %p in U mode",
+                cause, (void*)tfr->sepc);
+        }
+        process_exit(); //exit process
 }
