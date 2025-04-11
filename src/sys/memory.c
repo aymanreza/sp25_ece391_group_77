@@ -256,7 +256,12 @@ void memory_init(void) {
         heap_start, heap_end, (heap_end - heap_start) / 1024);
     
     // TODO: Initialize the free chunk list here
-
+    // finding # of free pages by dividing total available memory by page size
+    unsigned long free_pages = (RAM_END - (uintptr_t)heap_end) / PAGE_SIZE;
+    // casting start of available memory(heap end) as page chunk and initializing free_chunk_list
+    free_chunk_list = (struct page_chunk *)heap_end;
+    free_chunk_list->pagecnt = free_pages;
+    free_chunk_list->next = NULL;
     
     // Allow supervisor to access user memory. We could be more precise by only
     // enabling supervisor access to user memory when we are explicitly trying
@@ -283,17 +288,52 @@ mtag_t switch_mspace(mtag_t mtag) {
 mtag_t clone_active_mspace(void) {
     mtag_t TODO; 
     TODO = 0; 
-    return TODO; 
+    return main_mtag; // for cp2 single memory space, simply return the current active memory space
 }
 
 void reset_active_mspace(void) {
-    return; 
+    // iterating over all pages in the user memory
+    for (uintptr_t address = USER_START_VMA; address < USER_END_VMA; address += PAGE_SIZE) {
+        // getting pointer to level 2 page table
+        struct pte *lvl2 = active_space_ptab();
+        // using macro to compute index into level 2 page table
+        unsigned int lvl2_idx = VPN2(address);
+
+        // finding address of level 1 page table by left shifting by PAGE_ORDER
+        struct pte *lvl1 = (struct pte *)((uintptr_t)lvl2[lvl2_idx].ppn << PAGE_ORDER);
+        // using macro to compute level 1 index
+        unsigned int lvl1_idx = VPN1(address);
+
+        // finding address of level 0 page table by left shifting by PAGE_ORDER
+        struct pte *lvl0 = (struct pte *)((uintptr_t)lvl1[lvl1_idx].ppn << PAGE_ORDER);
+        // using macro to compute level 0 index
+        unsigned int lvl0_idx = VPN0(address);
+
+        // checking that lvl0 entry is valid
+        if (PTE_VALID(lvl0[lv0_idx])) {
+            // getting current physical page number
+            uintptr_t ppn = lvl0[lvl0_idx].ppn;
+
+            // converting page number to a pointer to the physical address of the page
+            void *phys_page_addr = (void *)((uintptr_t)ppn << PAGE_ORDER);
+
+            // freeing the physical page
+            free_phys_page(phys_page_addr);
+
+            // clearing the PTE
+            lvl0[lvl0_idx] = null_pte();
+        }   
+    }
+    // flushing the TLB to ensure unmapped pages aren't in cache
+    sfence_vma(); 
 }
 
 mtag_t discard_active_mspace(void) {
     mtag_t TODO; 
     TODO = 0;
-    return TODO; 
+    // resetting and returning the current active memory space
+    reset_active_mspace();
+    return main_mtag; 
 }
 
 // The map_page() function maps a single page into the active address space at
@@ -307,47 +347,259 @@ mtag_t discard_active_mspace(void) {
 // mapping megapages and gigapages.
 
 void * map_page(uintptr_t vma, void * pp, int rwxug_flags) {
-    return NULL;
+    // checking that page is properly aligned
+    assert(vma % PAGE_SIZE == 0);
+
+    // checking that page is well formed
+    assert(wellformed(vma));
+
+    // getting pointer to level 2 page table
+    struct pte *lvl2 = active_space_ptab();
+
+    // using macro to compute index into level 2 page table
+    unsigned int lvl2_idx = VPN2(vma);
+
+    // checking that lvl2 entry is valid
+    if (!PTE_VALID(lvl2[lvl2_idx])) {
+        // if not, allocate new page for lvl1 table, clear it, 
+        // and create a new PTE for it to assign to the lvl2 entry
+        void *new_lvl1 = alloc_phys_page();
+        memset(new_lvl1, 0, PAGE_SIZE);
+        lvl2[lvl2_idx] = ptab_pte(new_lvl1, PTE_G);
+    }
+
+    // finding address of level 1 page table by left shifting by PAGE_ORDER
+    struct pte *lvl1 = (struct pte *)((uintptr_t)lvl2[lvl2_idx].ppn << PAGE_ORDER);
+
+    // using macro to compute level 1 index
+    unsigned int lvl1_idx = VPN1(vma);
+
+    // checking that lvl1 entry is valid
+    if (!PTE_VALID(lvl1[lvl1_idx])) {
+        // if not, allocate new page for lvl0 table, clear it, 
+        // and create a new PTE for it to assign to the lvl0 entry
+        void *new_lvl0 = alloc_phys_page();
+        memset(new_lvl0, 0, PAGE_SIZE);
+        lvl1[lvl1_idx] = ptab_pte(new_lvl0, PTE_G);
+    }
+
+    // finding address of level 0 page table by left shifting by PAGE_ORDER
+    struct pte *lvl0 = (struct pte *)((uintptr_t)lvl1[lvl1_idx].ppn << PAGE_ORDER);
+
+    // using macro to compute level 0 index
+    unsigned int lvl0_idx = VPN0(vma);
+
+    // setting leaf PTE
+    lvl0[lvl0_idx] = leaf_pte(pp, rwxug_flags);
+
+    // flushing the TLB
+    sfence_vma();
+
+    return (void *)vma;
 }
 
 void * map_range(uintptr_t vma, size_t size, void * pp, int rwxug_flags) {
-    return NULL; 
+    // ensuring that the size is a multiple of PAGE_SIZE
+    size_t rounded_size = ROUND_UP(size, PAGE_SIZE);
+
+    // iterating over all pages in range
+    for (size_t page_offset = 0; page_offset < rounded_size; page_offset += PAGE_SIZE) {
+        // calculating page virtual and physical addresses and mapping each page
+        uintptr_t page_vma = vma + page_offset;
+        void * page_pp = (void *)((uintptr_t)pp + page_offset);
+        map_page(page_vma, page_pp, rwxug_flags);
+    }
+
+    return (void *)vma; 
 }
 
 void * alloc_and_map_range(uintptr_t vma, size_t size, int rwxug_flags) {
-    return NULL; 
+    // making sure size is a multiple of PAGE_SIZE and calculating page count
+    unsigned int page_count = ROUND_UP(size, PAGE_SIZE) / PAGE_SIZE;
+
+    // allocating pages and storing returned physical address pointer
+    uintptr_t phys_address_pointer = alloc_phys_pages(page_count);
+
+    // mapping pages using returned physical address pointer
+    map_range(vma, size, phys_address_pointer, rwxug_flags);
+
+    return (void *)vma; 
 }
 
 void set_range_flags(const void * vp, size_t size, int rwxug_flags) {
-    return; 
+    // ensuring that the size is a multiple of PAGE_SIZE
+    size_t rounded_size = ROUND_UP(size, PAGE_SIZE);
+
+    // iterating over all pages in range
+    for (size_t page_offset = 0; page_offset < rounded_size; page_offset += PAGE_SIZE) {
+        // calculating page virtual and physical addresses and mapping each page
+        uintptr_t page_vma = (uintptr_t)vp + page_offset;
+
+        // getting pointer to level 2 page table
+        struct pte *lvl2 = active_space_ptab();
+        // using macro to compute index into level 2 page table
+        unsigned int lvl2_idx = VPN2(page_vma);
+
+        // finding address of level 1 page table by left shifting by PAGE_ORDER
+        struct pte *lvl1 = (struct pte *)((uintptr_t)lvl2[lvl2_idx].ppn << PAGE_ORDER);
+        // using macro to compute level 1 index
+        unsigned int lvl1_idx = VPN1(page_vma);
+
+        // finding address of level 0 page table by left shifting by PAGE_ORDER
+        struct pte *lvl0 = (struct pte *)((uintptr_t)lvl1[lvl1_idx].ppn << PAGE_ORDER);
+        // using macro to compute level 0 index
+        unsigned int lvl0_idx = VPN0(page_vma);
+
+        // getting current physical page number
+        uintptr_t ppn = lvl0[lvl0_idx].ppn;
+
+        // creating new leaf PTE with updated flags
+        lvl0[lvl0_idx] = leaf_pte(pageptr(ppn), rwxug_flags);
+    }
+
+    // flushing TLB after updating range
+    sfence_vma(); 
 }
 
 void unmap_and_free_range(void * vp, size_t size) {
-    return; 
+    // ensuring that the size is a multiple of PAGE_SIZE
+    size_t rounded_size = ROUND_UP(size, PAGE_SIZE);
+
+    // iterating over all pages in range
+    for (size_t page_offset = 0; page_offset < rounded_size; page_offset += PAGE_SIZE) {
+        // calculating page virtual and physical addresses and mapping each page
+        uintptr_t page_vma = (uintptr_t)vp + page_offset;
+
+        // getting pointer to level 2 page table
+        struct pte *lvl2 = active_space_ptab();
+        // using macro to compute index into level 2 page table
+        unsigned int lvl2_idx = VPN2(page_vma);
+
+        // finding address of level 1 page table by left shifting by PAGE_ORDER
+        struct pte *lvl1 = (struct pte *)((uintptr_t)lvl2[lvl2_idx].ppn << PAGE_ORDER);
+        // using macro to compute level 1 index
+        unsigned int lvl1_idx = VPN1(page_vma);
+
+        // finding address of level 0 page table by left shifting by PAGE_ORDER
+        struct pte *lvl0 = (struct pte *)((uintptr_t)lvl1[lvl1_idx].ppn << PAGE_ORDER);
+        // using macro to compute level 0 index
+        unsigned int lvl0_idx = VPN0(page_vma);
+
+        // getting current physical page number
+        uintptr_t ppn = lvl0[lvl0_idx].ppn;
+
+        // converting page number to a pointer to the physical address of the page
+        void *phys_page_addr = (void *)((uintptr_t)ppn << PAGE_ORDER);
+
+        // freeing the physical page
+        free_phys_page(phys_page_addr);
+
+        // clearing the PTE
+        lvl0[lvl0_idx] = null_pte();
+    }
+
+    // flushing TLB after updating range
+    sfence_vma();
 }
 
 void * alloc_phys_page(void) {
-    return NULL;
+    return alloc_phys_pages(1); // same as multiple pages but with pagecnt of 1
 }
 
 void free_phys_page(void * pp) {
-    return; 
+    free_phys_pages(pp, 1); // same as multiple pages but with pagecnt of 1
 }
 
 void * alloc_phys_pages(unsigned int cnt) {
+    // declaring variables for navigating free_chunk_list and holding output
+    struct page_chunk *curr = free_chunk_list;
+    struct page_chunk *prev = NULL;
+    void * phys_address = NULL;
+
+    // iterating through free_chunk_list until I find one with enough pages
+    while (curr != NULL) {
+        // checking if current chunk has at least my desired page count
+        if (curr->pagecnt >= cnt) {
+            phys_address = (void *)curr; // storing address of the desired chunk
+            // case 1: chunk->pagecnt == cnt
+            if (curr->pagecnt == cnt) {
+                // if at head of free_chunk_list, move to next node
+                if (prev == NULL) {
+                    free_chunk_list = curr->next;
+                }
+                // else update prev next pointer to current next node
+                else {
+                    prev->next = curr->next;
+                }
+            }
+            // case 2: chunk->pagecnt > cnt
+            else {
+                // create a new chunk after subtracting cnt pages
+                struct page_chunk *new_chunk = (struct page_chunk *)((uintptr_t)curr + cnt * PAGE_SIZE);
+                // update new chunk's pagecnt and link to next node in free_chunk_list
+                new_chunk->pagecnt = curr->pagecnt - cnt;
+                new_chunk->next = curr->next;
+                // if at head of free_chunk_list, move to next node
+                if (prev == NULL) {
+                    free_chunk_list = new_chunk;
+                } 
+                // else, update prev pointer to the new chunk
+                else {
+                    prev->next = new_chunk;
+                }
+            }
+            return phys_address;
+        }
+        // move to next node in free_chunk_list
+        prev = curr;
+        curr = curr->next;
+    }
+    // if no chunk is found, panic
+    panic("ran out of physical memory for allocating pages");
     return NULL;
 }
 
 void free_phys_pages(void * pp, unsigned int cnt) {
-    return; 
+    // casting provided page base address to a chunk
+    struct page_chunk * free_chunk = (struct page_chunk *)pp;
+
+    // setting provided chunk pagecount
+    free_chunk->pagecnt = cnt;
+
+    // adding freed chunk to head of free_chunk_list
+    free_chunk->next = free_chunk_list;
+    free_chunk_list = free_chunk;
 }
 
 unsigned long free_phys_page_count(void) {
-    return 0;
+    // declaring variables for navigating free_chunk_list and holding the final page count
+    struct page_chunk *curr = free_chunk_list;
+    unsigned long count = 0;
+
+    // iterating through free_chunk_list and adding each chunk's pagecount to count
+    while (curr != NULL) {
+        count += curr->pagecnt;
+        curr = curr->next;
+    }
+
+    return count; //returning total free page count
 }
 
 int handle_umode_page_fault(struct trap_frame * tfr, uintptr_t vma) {
-    return 0; // no handled
+    // checking that vma is within user memory
+    if (vma < USER_START_VMA || vma >= USER_END_VMA) {
+        // if not, return 0
+        return 0;
+    }
+
+    // allocating a new physical page
+    void *new_page = alloc_phys_page();
+    assert(new_page != NULL);
+
+    // mapping the new page with given vma and user-mode flags
+    map_page(vma, new_page, PTE_R | PTE_W | PTE_U);
+
+    return 1; // signaling handled fault
 }
 
 
