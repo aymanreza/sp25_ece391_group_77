@@ -106,6 +106,7 @@ int validate_vmem(const void *buf, size_t len) {
     return 0;
 }
 
+// helper function for if fd=-1 and must be allocated to next available
 static int allocate_fd(int fd, struct io * io) {
     struct process * proc = current_process();
 

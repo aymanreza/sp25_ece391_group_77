@@ -96,6 +96,7 @@ struct thread {
     struct condition * wait_cond;
     struct condition child_exit;
     struct lock * lock_list; // added linked list of locks currently held by this thread
+    struct process * proc; //process associated with thread
 };
 
 
@@ -358,6 +359,7 @@ void thread_exit(void) {
     }
 
    set_thread_state(TP, THREAD_EXITED); // this will check if the current thread exist
+   TP->proc = NULL; // no process any more
     condition_broadcast(&TP->parent->child_exit); //notify the parent thread if the thread exist
     running_thread_suspend(); // this will suspend the execution and change to the avaibale thread
     halt_failure(); // check if the control reach here, which mean that thread system have failed
@@ -551,6 +553,7 @@ void thread_reclaim(int tid) {
 
 
     thrtab[tid] = NULL;
+    thr->proc = NULL; // added for process
     kfree(thr);
 }
 
@@ -596,6 +599,7 @@ struct thread * create_thread(const char * name) {
     thr->id = tid;
     thr->name = name;
     thr->parent = TP;
+    thr->proc = NULL; // added for processes
     return thr;
 }
 // Inputs: None
@@ -838,3 +842,29 @@ void lock_release(struct lock * lock) {
 
     restore_interrupts(pie);
 }
+
+//Returns a pointer to the process struct of the currently running thread's process.
+//There can only be one currently running thread which is why there is no input parameters.
+struct process * running_thread_process(void) { 
+    return TP->proc;
+}
+
+
+// Returns a pointer to the process struct of a thread's process.
+// The process of a thread can be accessed from the thrtab. Returns NULL if the specified thread does not have an associated process (e.g. idle thread).
+struct process * thread_process(int tid) { 
+    if (tid < 0 || tid >= NTHR || thrtab[tid] == NULL) return NULL;
+
+    struct thread * thr = thrtab[tid];
+    return thr->proc;
+}
+
+//Sets a thread's associated process.
+// The proc argument can be NULL if a thread is a kernel thread (e.g. idle).
+void thread_set_process(int tid, struct process * proc ) {
+    if (tid < 0 || tid >= NTHR || thrtab[tid] == NULL) return;
+
+    struct thread * thr = thrtab[tid];
+    thr->proc = proc;
+}
+    
