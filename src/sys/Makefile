@@ -22,10 +22,13 @@ OBJS = \
 	heap0.o \
 	intr.o \
 	io.o \
+	memory.o \
+	process.o \
 	plic.o \
 	see.o \
 	start.o \
 	string.o \
+	syscall.o \
 	timer.o \
 	trap.o \
 	ktfs.o \

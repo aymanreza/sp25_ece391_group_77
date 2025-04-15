@@ -136,9 +136,28 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
         if (phdr.p_type != PT_LOAD) continue;
 
         // Check memory range is within allowed region
-        if (phdr.p_vaddr < 0x80100000 || phdr.p_vaddr + phdr.p_memsz > 0x81000000) {
+        if (phdr.p_vaddr < 0x0C0000000UL || phdr.p_vaddr + phdr.p_memsz > 0x100000000UL) {
             return -EINVAL;
         }
+
+        // variable for holding permission flags
+        int flags = PTE_U;
+
+        // determining additional permission flags
+        if (phdr.p_flags & PF_R) {
+            flags |= PTE_R;
+        }
+
+        if (phdr.p_flags & PF_W) {
+            flags |= PTE_W;
+        }
+
+        if (phdr.p_flags & PF_X) {
+            flags |= PTE_X;
+        }
+
+        // allocating and mapping the region for this segment
+        alloc_and_map_range(phdr.p_vaddr, phdr.p_memsz, seg_flags);
 
         // Read program segment into memory
         if (ioreadat(elfio, phdr.p_offset, (void*)(uintptr_t)phdr.p_vaddr, phdr.p_filesz)

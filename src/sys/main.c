@@ -11,6 +11,8 @@
 #include "dev/uart.h"
 #include "intr.h"
 #include "dev/virtio.h"
+#include "memory.h"
+#include "process.h"
 
 #define VIRTIO_MMIO_STEP (VIRTIO1_MMIO_BASE-VIRTIO0_MMIO_BASE)
 extern char _kimg_end[]; 
@@ -24,10 +26,11 @@ void main(void) {
     void (*exe_entry)(void);
 
     console_init();
+    memory_init(); // added memory initialization
+    procmgr_init(); // added process manager initialization
     devmgr_init();
     intrmgr_init();
     thrmgr_init();
-    heap_init(_kimg_end, UMEM_START); 
     uart_attach((void*)UART0_MMIO_BASE, UART0_INTR_SRCNO+0);
     uart_attach((void*)UART1_MMIO_BASE, UART0_INTR_SRCNO+1);
     rtc_attach((void*)RTC_MMIO_BASE);
