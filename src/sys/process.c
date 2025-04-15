@@ -36,6 +36,7 @@
 #define NPROC 16
 #endif
 
+
 // INTERNAL FUNCTION DECLARATIONS
 //
 
@@ -89,15 +90,137 @@ void procmgr_init(void) {
 }
 
 int process_exec(struct io * exeio, int argc, char ** argv) {
-    return 0; 
+    assert(exeio != NULL); // validating arugments
+
+    // Get current process
+    struct process *proc = current_process();
+    assert(proc != NULL);
+
+    // Reset memory space (clear old mappings and free physical pages)
+    reset_active_mspace();
+
+    // Load ELF executable (returns entry point or 0 on failure)
+    void *entry = elf_load(exeio, UMEM_START_VMA);
+    if (entry == NULL) {
+        kprintf("ELF LOAD FAILED\n");
+        thread_exit();
+    }
+
+    // Allocate and build user stack
+    void *stack = alloc_phys_page();
+    if (stack == NULL) {
+        kprintf("FAILED TO ALLOCATE STACK\n");
+        thread_exit();
+    }
+
+    map_page(UMEM_END_VMA - PAGE_SIZE, stack, PTE_R | PTE_W | PTE_U);
+    int stksz = build_stack(stack, argc, argv);
+    if (stksz < 0) {
+        kprintf("FAILED TO BUILD USER STACK\n");
+        thread_exit();
+    }
+
+    // Set up trap frame
+    struct trap_frame tf = {0};
+    tf.sp = (void *)(UMEM_END_VMA - stksz); // user stack top
+    tf.ra = entry; // jump to ELF entry point
+    tf.sepc = entry;  // program counter
+
+    // Set argument registers
+    tf.a0 = argc;
+    tf.a1 = (long)(UMEM_END_VMA - PAGE_SIZE + ((char *)stack + PAGE_SIZE - stksz) - (char *)stack);
+
+    // Jump to user mode
+    trap_frame_jump(&tf);
+
+    // Should never return
+    return -1;
 }
 
 int process_fork(const struct trap_frame * tfr) {
+assert(tfr != NULL); // validating arguments
+
+    // Find a free slot in proctab[]
+    int pid;
+    for (pid = 0; pid < NPROC; pid++) { //cylcing through the process ids
+        if (proctab[pid] == NULL) break;
+    }
+    if (pid == NPROC) return -EMPROC; //process not in table
+
+    // Allocate and initialize new process struct
+    struct process *child_proc = kcalloc(1, sizeof(struct process));
+    if (!child_proc) return -ENOMEM; // memory was not allocated
+
+    // Copy parent's mspace
+    mtag_t child_mtag = clone_active_mspace(); //cloning parent memory tag to the childs
+    if (!child_mtag) { //if there is no child mtag returned,
+        kfree(child_proc); //free associated memory
+        return -ENOMEM;
+    }
+
+    struct process *parent_proc = current_process(); //parent process is the current process
+    child_proc->idx = pid; // assign pid so we can find in table
+    child_proc->mtag = child_mtag; //memory tag same as parents
+    proctab[pid] = child_proc; // new entry into table
+
+    // copy file descriptors from parent
+    for (int i = 0; i < PROCESS_IOMAX; i++) {
+        if (parent_proc->iotab[i] != NULL) // if tere is an empty space in the table
+            child_proc->iotab[i] = ioaddref(parent_proc->iotab[i]); //add io object to table
+    }
+
+    // copy trap frame
+    struct trap_frame *new_tf = kmalloc(sizeof(struct trap_frame));
+    if (!new_tf) return -ENOMEM;
+    *new_tf = *tfr; // new child trap frame is now parents
+
+    // for child: fork returns 0
+    new_tf->a0 = 0;
+
+    // create child thread to resume in U-mode with copied trap frame
+    struct condition *done = kcalloc(1, sizeof(struct condition));
+    condition_init(done, "fork-done");
+
+    int tid = thread_spawn("child", (void (*)(void))fork_func, done, new_tf); //spawn new child thread with entry into fork
+    if (tid < 0) return tid; //fail
+
+    thread_set_process(tid, child_proc); // assigning the thread to child process
+    child_proc->tid = tid; //updating process struct with tid
+
+    // Wait until child has used trap_frame
+    condition_wait(done);
+    kfree(done);
+    kfree(new_tf);
+
     return 0; 
 }
 
 void process_exit(void) {
-    return; 
+    struct process *proc = current_process(); // getting current process
+    if (proc == NULL) //if there is not process, exit thread
+        thread_exit();
+
+    // close all open I/O
+    for (int i = 0; i < PROCESS_IOMAX; i++) {
+        if (proc->iotab[i] != NULL) { //if table spot is used
+            ioclose(proc->iotab[i]);   // safe to call even if already closed
+            proc->iotab[i] = NULL;  //clear it
+        }
+    }
+
+    // discard the memory space
+    discard_active_mspace();
+
+    // remove from proctab
+    if (proc->idx >= 0 && proc->idx < NPROC)
+        proctab[proc->idx] = NULL;
+
+    // free process if not static main_proc
+    if (proc != &main_proc)
+        kfree(proc);
+
+    // exit thread
+    thread_exit();
 }
 
 // INTERNAL FUNCTION DEFINITIONS
@@ -155,5 +278,13 @@ int build_stack(void * stack, int argc, char ** argv) {
 }
 
 void fork_func(struct condition * done, struct trap_frame * tfr) {
+    // switch to child’s memory space
+    switch_mspace(current_process()->mtag);
+
+    // Notify parent it can free trap frame
+    condition_broadcast(done);
+
+    // enter U-mode
+    trap_frame_jump(tfr);
     return;
 }
