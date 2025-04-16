@@ -17,5 +17,7 @@ extern char fs_initialized;
 extern int fsmount(struct io * io);
 extern int fsopen(const char * name, struct io ** ioptr);
 extern int fsflush(void);
+extern int fscreate(const char* name);
+extern int fsdelete(const char* name);
 
 #endif // _FS_H_

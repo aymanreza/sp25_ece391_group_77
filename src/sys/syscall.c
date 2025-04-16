@@ -284,13 +284,13 @@ int syspipe(int * wfdptr, int * rfdptr) {
 int sysfscreate(const char* name) {
     if (validate_vstr(name, MAX_PRINT_LEN) < 0) return -EACCESS;//validating string
 
-    return ktfs_create(name);  // calling create from ktfs
+    return fscreate(name);  // calling create from ktfs
 }
 
 int sysfsdelete(const char* name) {
     if (validate_vstr(name, MAX_PRINT_LEN) < 0) //validating string
         return -EACCESS;
 
-    return ktfs_delete(name);  // calling delete from ktfs
+    return fsdelete(name);  // calling delete from ktfs
 }
 

@@ -89,6 +89,12 @@ int fsopen(const char * name, struct io ** ioptr)
 int fsflush(void)
     __attribute__ ((alias("ktfs_flush")));
 
+int fscreate(const char* name)
+    __attribute__ ((alias("ktfs_create")));
+
+int fsdelete(const char* name)
+    __attribute__ ((alias("ktfs_delete")));
+
 
 
 
