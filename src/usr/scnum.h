@@ -16,6 +16,8 @@
 
 #define SYSCALL_DEVOPEN 10  // open a device
 #define SYSCALL_FSOPEN  11  // open a file
+#define SYSCALL_FSCREATE 12 // create a file
+#define SYSCALL_FSDELETE 13 // delete a file
 
 #define SYSCALL_CLOSE   16  // close fd
 #define SYSCALL_READ    17  // read from fd

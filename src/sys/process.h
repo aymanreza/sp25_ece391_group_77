@@ -58,6 +58,8 @@ static inline struct process * current_process(void);
 // INLINE FUNCTION DEFINITIONS
 // 
 
+extern struct process * running_thread_process(void);
+
 static inline struct process * current_process(void) {
     return running_thread_process();
 }

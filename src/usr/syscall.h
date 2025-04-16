@@ -22,5 +22,7 @@ extern int _close(int fd);
 extern long _read(int fd, void * buf, size_t bufsz);
 extern long _write(int fd, const void * buf, size_t len);
 extern int _ioctl(int fd, const int cmd, void * arg);
+extern int _fscreate(const char* name); // added 
+extern int _fsdelete(const char* name); // added 
 
 #endif // _SYSCALL_H_

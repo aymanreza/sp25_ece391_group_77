@@ -92,4 +92,18 @@ _ioctl:
         ecall
         ret
 
+        .global _fscreate
+        .type   _fscreate, @function
+_fscreate:
+        li      a7, SYSCALL_FSCREATE
+        ecall
+        ret
+
+        .global _fsdelete
+        .type   _fsdelete, @function
+_fsdelete:
+        li      a7, SYSCALL_FSDELETE
+        ecall
+        ret
+
         .end

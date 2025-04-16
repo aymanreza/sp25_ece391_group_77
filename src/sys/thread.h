@@ -129,4 +129,12 @@ extern void lock_acquire(struct lock * lock);
 
 extern void lock_release(struct lock * lock);
 
+extern struct process * running_thread_process(void);
+
+extern struct process * thread_process(int tid);
+
+extern void thread_set_process(int tid, struct process * proc);
+
+extern char * get_scratch(void);
+
 #endif // _THREAD_H_

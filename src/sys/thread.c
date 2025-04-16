@@ -125,6 +125,12 @@ struct thread {
 } while (0)
 
 
+//helpers
+
+char * get_scratch(void) {
+    return (char *)TP->stack_anchor - sizeof(struct trap_frame);
+}
+
 // INTERNAL FUNCTION DECLARATIONS
 //
 

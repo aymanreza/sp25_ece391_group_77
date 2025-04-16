@@ -157,7 +157,7 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
         }
 
         // allocating and mapping the region for this segment
-        alloc_and_map_range(phdr.p_vaddr, phdr.p_memsz, seg_flags);
+        alloc_and_map_range(phdr.p_vaddr, phdr.p_memsz, flags);
 
         // Read program segment into memory
         if (ioreadat(elfio, phdr.p_offset, (void*)(uintptr_t)phdr.p_vaddr, phdr.p_filesz)

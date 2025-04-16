@@ -28,12 +28,17 @@
 #include "thread.h"
 #include "process.h"
 #include "ioimpl.h"
+#include "ktfs.h"
 
 #define MAX_PRINT_LEN 512  
 #define NEXT_RISCV_INSTRUCTION 4 //each instruction is 4 bytes wide
 
 // EXPORTED FUNCTION DECLARATIONS
 //
+
+
+extern int ktfs_create(const char* name);
+extern int ktfs_delete(const char* name);
 
 extern void handle_syscall(struct trap_frame * tfr); // called from excp.c
 
@@ -160,6 +165,10 @@ int64_t syscall(const struct trap_frame * tfr) {
             return sysioctl((int)tfr->a0, (int) tfr->a1, (void *)tfr->a2);
         case(SYSCALL_PIPE):
             return syspipe((int *)tfr->a0, (int *) tfr->a1);
+        case(SYSCALL_FSCREATE):
+            return sysfscreate((const char*) tfr->a0);
+        case(SYSCALL_FSDELETE):
+            return sysfsdelete((const char*) tfr->a0);
         default:
             return -ENOTSUP;
 
@@ -224,7 +233,7 @@ int sysfsopen(int fd, const char * name) {
         return -EACCESS;
 
     struct io *io;
-    int rc = ktfs_open(name, &io);
+    int rc = fsopen(name, &io);
     if (rc < 0)
         return rc;
 
@@ -245,30 +254,25 @@ int sysclose(int fd) {
 
 long sysread(int fd, void * buf, size_t bufsz) {
     struct io * io = process_get_io(fd); // recovering io pointer
-    if (io == NULL)
-        return -EBADFD;
+    if (io == NULL) return -EBADFD;
 
-        if (validate_vmem(buf, bufsz) < 0)
-        return -EACCESS;
+        if (validate_vmem(buf, bufsz) < 0) return -EACCESS;
 
     return io->intf->read(io, buf, bufsz); //calling from io abstraction
 }
 
 long syswrite(int fd, const void * buf, size_t len) {
     struct io * io = process_get_io(fd); // recovering io pointer
-    if (io == NULL)
-        return -EBADFD;
+    if (io == NULL) return -EBADFD;
 
-        if (validate_vmem(buf, len) < 0)
-        return -EACCESS;
+    if (validate_vmem(buf, len) < 0) return -EACCESS;
 
     return io->intf->write(io, buf, len); //calling from io abstraction
 }
 
 int sysioctl(int fd, int cmd, void * arg) {
     struct io * io = process_get_io(fd); // recovering io pointer
-    if (io == NULL)
-        return -EBADFD;
+    if (io == NULL) return -EBADFD;
 
     return io->intf->cntl(io, cmd, arg); //calling from io abstraction
 }
@@ -278,8 +282,7 @@ int syspipe(int * wfdptr, int * rfdptr) {
 }
 
 int sysfscreate(const char* name) {
-    if (validate_vstr(name, MAX_PRINT_LEN) < 0) //validating string
-        return -EACCESS;
+    if (validate_vstr(name, MAX_PRINT_LEN) < 0) return -EACCESS;//validating string
 
     return ktfs_create(name);  // calling create from ktfs
 }

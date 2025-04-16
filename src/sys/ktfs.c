@@ -61,6 +61,10 @@ int ktfs_open(const char * name, struct io ** ioptr);
 void ktfs_close(struct io* io);
 long ktfs_readat(struct io* io, unsigned long long pos, void * buf, long len);
 int ktfs_cntl(struct io *io, int cmd, void *arg);
+long ktfs_writeat(struct io* io, unsigned long long pos, const void * buf, long len);
+
+int ktfs_create(const char* name);
+int ktfs_delete(const char* name);
 
 
 int ktfs_getblksz(struct ktfs_file *fd);

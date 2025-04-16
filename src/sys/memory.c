@@ -257,7 +257,7 @@ void memory_init(void) {
     
     // TODO: Initialize the free chunk list here
     // finding # of free pages by dividing total available memory by page size
-    unsigned long free_pages = (RAM_END - (uintptr_t)heap_end) / PAGE_SIZE;
+    unsigned long free_pages = (unsigned long)(RAM_END - (uintptr_t)heap_end) / PAGE_SIZE;
     // casting start of available memory(heap end) as page chunk and initializing free_chunk_list
     free_chunk_list = (struct page_chunk *)heap_end;
     free_chunk_list->pagecnt = free_pages;
@@ -286,14 +286,14 @@ mtag_t switch_mspace(mtag_t mtag) {
 }
 
 mtag_t clone_active_mspace(void) {
-    mtag_t TODO; 
-    TODO = 0; 
+    // mtag_t TODO; 
+    // TODO = 0; 
     return main_mtag; // for cp2 single memory space, simply return the current active memory space
 }
 
 void reset_active_mspace(void) {
     // iterating over all pages in the user memory
-    for (uintptr_t address = USER_START_VMA; address < USER_END_VMA; address += PAGE_SIZE) {
+    for (uintptr_t address = UMEM_START_VMA; address < UMEM_END_VMA; address += PAGE_SIZE) {
         // getting pointer to level 2 page table
         struct pte *lvl2 = active_space_ptab();
         // using macro to compute index into level 2 page table
@@ -310,7 +310,7 @@ void reset_active_mspace(void) {
         unsigned int lvl0_idx = VPN0(address);
 
         // checking that lvl0 entry is valid
-        if (PTE_VALID(lvl0[lv0_idx])) {
+        if (PTE_VALID(lvl0[lvl0_idx])) {
             // getting current physical page number
             uintptr_t ppn = lvl0[lvl0_idx].ppn;
 
@@ -329,10 +329,10 @@ void reset_active_mspace(void) {
 }
 
 mtag_t discard_active_mspace(void) {
-    mtag_t TODO; 
-    TODO = 0;
-    // resetting and returning the current active memory space
-    reset_active_mspace();
+    // mtag_t TODO; 
+    // TODO = 0;
+    // // resetting and returning the current active memory space
+    // reset_active_mspace();
     return main_mtag; 
 }
 
@@ -418,7 +418,7 @@ void * alloc_and_map_range(uintptr_t vma, size_t size, int rwxug_flags) {
     unsigned int page_count = ROUND_UP(size, PAGE_SIZE) / PAGE_SIZE;
 
     // allocating pages and storing returned physical address pointer
-    uintptr_t phys_address_pointer = alloc_phys_pages(page_count);
+    void* phys_address_pointer = alloc_phys_pages(page_count);
 
     // mapping pages using returned physical address pointer
     map_range(vma, size, phys_address_pointer, rwxug_flags);
@@ -587,7 +587,7 @@ unsigned long free_phys_page_count(void) {
 
 int handle_umode_page_fault(struct trap_frame * tfr, uintptr_t vma) {
     // checking that vma is within user memory
-    if (vma < USER_START_VMA || vma >= USER_END_VMA) {
+    if (vma < UMEM_START_VMA || vma >= UMEM_END_VMA) {
         // if not, return 0
         return 0;
     }
