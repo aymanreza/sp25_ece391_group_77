@@ -349,7 +349,7 @@ long ktfs_readat(struct io* io, unsigned long long pos, void * buf, long len) {
     // retreiving file from io pointer
     struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io));
 
-
+//global array curently open files
     // if file is in use then dont proceed
     if (file->flags != KTFS_FILE_IN_USE){lock_release(&fs.fs_lock); return -EINVAL;}
     if (pos >= file->size) {lock_release(&fs.fs_lock); return 0;} //if position is past the filesize, dont proceed
@@ -430,7 +430,10 @@ int ktfs_cntl(struct io *io, int cmd, void *arg) {
     }
    
    
-    else {lock_release(&fs.fs_lock); return -ENOTSUP;}  // nthis is usupported control command
+    else {
+        lock_release(&fs.fs_lock); 
+        return -ENOTSUP;
+    }  // nthis is usupported control command
 }
 // Inputs: None
 // Outputs: int - Returns 0 on success, or a negative failure
@@ -676,17 +679,9 @@ for (int i = 0; i < KTFS_NUM_DIRECT_DATA_BLOCKS; i++) {
             block_idx = i;
             entry_idx = j;
             target_inode = dentries[j].inode;
-            goto DELETE_FOUND;
         }
     }
 }
-
-
-lock_release(&fs.fs_lock);
-return -ENOENT;
-
-
-DELETE_FOUND:
 struct ktfs_inode file_inode;
 ret = ktfs_read_inode(target_inode, &file_inode);
 if (ret < 0) {
