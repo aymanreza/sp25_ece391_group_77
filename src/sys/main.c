@@ -27,10 +27,10 @@ void main(void) {
 
     console_init();
     memory_init(); // added memory initialization
-    procmgr_init(); // added process manager initialization
     devmgr_init();
     intrmgr_init();
     thrmgr_init();
+    procmgr_init(); // added process manager initialization
     uart_attach((void*)UART0_MMIO_BASE, UART0_INTR_SRCNO+0);
     uart_attach((void*)UART1_MMIO_BASE, UART0_INTR_SRCNO+1);
     rtc_attach((void*)RTC_MMIO_BASE);
@@ -57,7 +57,7 @@ void main(void) {
         panic("Failed to open UART\n");
     }
 
-    result = fsopen("trek", &trekio);
+    result = fsopen("trek_cp2", &trekio);
     if (result < 0) {
         kprintf("Error: %d\n", result);
         panic("Failed to open trek\n");

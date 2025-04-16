@@ -53,9 +53,9 @@ static int build_stack(void * stack, int argc, char ** argv);
 static struct process main_proc;
 
 
-// static struct process * proctab[NPROC] = {
-//     &main_proc
-// };
+static struct process * proctab[NPROC] = {
+    &main_proc
+};
 
 // EXPORTED GLOBAL VARIABLES
 //
@@ -138,7 +138,7 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
     return -1;
 }
 
-// int process_fork(const struct trap_frame * tfr) {
+int process_fork(const struct trap_frame * tfr) {
 // assert(tfr != NULL); // validating arguments
 
 //     // Find a free slot in proctab[]
@@ -193,36 +193,36 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
 //     kfree(done);
 //     kfree(new_tf);
 
-//     return 0; 
-// }
+    return 0; 
+}
 
-// void process_exit(void) {
-//     struct process *proc = current_process(); // getting current process
-//     if (proc == NULL) //if there is not process, exit thread
-//         thread_exit();
+void process_exit(void) {
+    struct process *proc = current_process(); // getting current process
+    if (proc == NULL) //if there is not process, exit thread
+        thread_exit();
 
-//     // close all open I/O
-//     for (int i = 0; i < PROCESS_IOMAX; i++) {
-//         if (proc->iotab[i] != NULL) { //if table spot is used
-//             ioclose(proc->iotab[i]);   // safe to call even if already closed
-//             proc->iotab[i] = NULL;  //clear it
-//         }
-//     }
+    // close all open I/O
+    for (int i = 0; i < PROCESS_IOMAX; i++) {
+        if (proc->iotab[i] != NULL) { //if table spot is used
+            ioclose(proc->iotab[i]);   // safe to call even if already closed
+            proc->iotab[i] = NULL;  //clear it
+        }
+    }
 
-//     // discard the memory space
-//     discard_active_mspace();
+    // discard the memory space
+    discard_active_mspace();
 
-//     // remove from proctab
-//     if (proc->idx >= 0 && proc->idx < NPROC)
-//         proctab[proc->idx] = NULL;
+    // remove from proctab
+    if (proc->idx >= 0 && proc->idx < NPROC)
+        proctab[proc->idx] = NULL;
 
-//     // free process if not static main_proc
-//     if (proc != &main_proc)
-//         kfree(proc);
+    // free process if not static main_proc
+    if (proc != &main_proc)
+        kfree(proc);
 
-//     // exit thread
-//     thread_exit();
-// }
+    // exit thread
+    thread_exit();
+}
 
 // INTERNAL FUNCTION DEFINITIONS
 //
