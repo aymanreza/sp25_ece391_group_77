@@ -365,7 +365,7 @@ void * map_page(uintptr_t vma, void * pp, int rwxug_flags) {
         // and create a new PTE for it to assign to the lvl2 entry
         void *new_lvl1 = alloc_phys_page();
         memset(new_lvl1, 0, PAGE_SIZE);
-        lvl2[lvl2_idx] = ptab_pte(new_lvl1, PTE_G);
+        lvl2[lvl2_idx] = ptab_pte((struct pte *)new_lvl1, PTE_G);
     }
 
     // finding address of level 1 page table by left shifting by PAGE_ORDER
@@ -380,7 +380,7 @@ void * map_page(uintptr_t vma, void * pp, int rwxug_flags) {
         // and create a new PTE for it to assign to the lvl0 entry
         void *new_lvl0 = alloc_phys_page();
         memset(new_lvl0, 0, PAGE_SIZE);
-        lvl1[lvl1_idx] = ptab_pte(new_lvl0, PTE_G);
+        lvl1[lvl1_idx] = ptab_pte((struct pte *)new_lvl0, PTE_G);
     }
 
     // finding address of level 0 page table by left shifting by PAGE_ORDER
@@ -389,8 +389,13 @@ void * map_page(uintptr_t vma, void * pp, int rwxug_flags) {
     // using macro to compute level 0 index
     unsigned int lvl0_idx = VPN0(vma);
 
+    // kprintf("Mapping vaddr 0x%lx to physical %p (VPN2=%u, VPN1=%u, VPN0=%u)\n", vma, pp, VPN2(vma), VPN1(vma), VPN0(vma));
+
     // setting leaf PTE
     lvl0[lvl0_idx] = leaf_pte(pp, rwxug_flags);
+
+    // struct pte p = lvl0[lvl0_idx];
+    // kprintf("Final PTE: flags=0x%x, ppn=0x%lx\n", p.flags, p.ppn);
 
     // flushing the TLB
     sfence_vma();
@@ -419,6 +424,9 @@ void * alloc_and_map_range(uintptr_t vma, size_t size, int rwxug_flags) {
 
     // allocating pages and storing returned physical address pointer
     void* phys_address_pointer = alloc_phys_pages(page_count);
+    if (!phys_address_pointer) panic("Failed to alloc physical pages!");
+
+    // kprintf("Allocated %u page(s) at physical %p for vaddr 0x%lx\n", page_count, phys_address_pointer, vma);
 
     // mapping pages using returned physical address pointer
     map_range(vma, size, phys_address_pointer, rwxug_flags);

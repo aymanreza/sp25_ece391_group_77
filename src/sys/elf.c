@@ -136,7 +136,7 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
         if (phdr.p_type != PT_LOAD) continue;
 
         // Check memory range is within allowed region
-        if (phdr.p_vaddr < 0x0C0000000UL || phdr.p_vaddr + phdr.p_memsz > 0x100000000UL) {
+        if (phdr.p_vaddr < UMEM_START_VMA || phdr.p_vaddr + phdr.p_memsz > UMEM_END_VMA) {
             return -EINVAL;
         }
 
@@ -156,8 +156,20 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
             flags |= PTE_X;
         }
 
-        // allocating and mapping the region for this segment
-        alloc_and_map_range(phdr.p_vaddr, phdr.p_memsz, flags);
+        // Save original flags
+        int orig_flags = flags;
+
+        // Always add write for loading
+        int temp_flags = orig_flags | PTE_W;
+
+        // Allocate and map with temp flags
+        alloc_and_map_range(phdr.p_vaddr, phdr.p_memsz, temp_flags);
+
+        // // allocating and mapping the region for this segment
+        // alloc_and_map_range(phdr.p_vaddr, phdr.p_memsz, flags);
+
+        // kprintf("Mapping segment: vaddr=0x%lx filesz=%lu memsz=%lu flags=0x%x\n",
+        //     phdr.p_vaddr, phdr.p_filesz, phdr.p_memsz, flags);
 
         // Read program segment into memory
         if (ioreadat(elfio, phdr.p_offset, (void*)(uintptr_t)phdr.p_vaddr, phdr.p_filesz)
@@ -167,6 +179,9 @@ int elf_load(struct io * elfio, void (**eptr)(void)) {
 
         // Zero any additional memory past file size
         memset((char*)(uintptr_t)phdr.p_vaddr + phdr.p_filesz, 0, phdr.p_memsz - phdr.p_filesz);
+
+        // Reset to original flags (e.g., remove write from .text)
+        set_range_flags((void*)phdr.p_vaddr, phdr.p_memsz, orig_flags);
     }
 
     // Set the entry point

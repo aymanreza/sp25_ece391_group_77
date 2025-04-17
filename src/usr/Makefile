@@ -9,7 +9,7 @@ LD=$(TOOLPREFIX)ld
 OBJCOPY=$(TOOLPREFIX)objcopy
 OBJDUMP=$(TOOLPREFIX)objdump
 
-UMODE := 0
+UMODE := 1
 
 ULIB_OBJS = \
 	io.o \

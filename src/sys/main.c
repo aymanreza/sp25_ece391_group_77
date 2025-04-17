@@ -69,9 +69,10 @@ void main(void) {
     // 2. Verify the loading of the file into memory
     assert(result == 0);
     // 3. Run trek on a new thread
-    result = thread_spawn("trek", exe_entry, termio);
+    int tid = thread_spawn("trek_cp2", exe_entry, termio);
     
     // 4. Verify that the thread was able to run properly, if it was have the main thread wait for trek to finish
-    assert(result > 0);
+    assert(tid > 0);
+    thread_set_process(tid, thread_process(tid));
     thread_join(0);
 }

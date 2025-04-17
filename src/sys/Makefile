@@ -47,8 +47,8 @@ CFLAGS += -fno-common -nostdlib -mno-relax -ffreestanding
 CFLAGS += -fno-asynchronous-unwind-tables -mno-riscv-attribute
 CFLAGS += -I.
 
-#CFLAGS += -DDEBUG -DTRACE # Everything!
-#CFLAGS += -DMEMORY_DEBUG -DMEMORY_TRACE
+# CFLAGS += -DDEBUG -DTRACE # Everything!
+CFLAGS += -DMEMORY_DEBUG -DMEMORY_TRACE
 #CFLAGS += -DHEAP_DEBUG -DHEAP_TRACE
 #CFLAGS += -DEZFS_DEBUG -DEZFS_TRACE
 #CFLAGS += -DLOCK_DEBUG -DLOCK_TRACE

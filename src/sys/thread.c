@@ -29,6 +29,7 @@
 #include "intr.h"
 #include "memory.h"
 #include "error.h"
+#include "process.h"
 
 
 #include <stdarg.h>
@@ -134,6 +135,7 @@ char * get_scratch(void) {
 // INTERNAL FUNCTION DECLARATIONS
 //
 
+void thread_user_entry(void (*entry)(void));
 
 // Initializes the main and idle threads. called from threads_init().
 
@@ -873,4 +875,15 @@ void thread_set_process(int tid, struct process * proc ) {
     struct thread * thr = thrtab[tid];
     thr->proc = proc;
 }
-    
+
+void thread_user_entry(void (*entry)(void)) {
+    struct process *proc = TP->proc;
+    if (proc) {
+        switch_mspace(proc->mtag);
+    }
+
+    kprintf("Jumping to user entry = %p\n", entry); // check it's in 0xc0...
+
+    entry();  // <- crash might happen right here
+    thread_exit();
+}
