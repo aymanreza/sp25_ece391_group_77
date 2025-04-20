@@ -100,6 +100,7 @@ void handle_umode_exception(unsigned int cause, struct trap_frame * tfr) {
             switch (cause) {
             case RISCV_SCAUSE_ECALL_FROM_UMODE:
                 handle_syscall(tfr);
+                tfr->sepc += 4;
                 break;
         
             case RISCV_SCAUSE_LOAD_PAGE_FAULT:
