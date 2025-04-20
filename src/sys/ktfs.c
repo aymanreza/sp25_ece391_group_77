@@ -300,7 +300,8 @@ int ktfs_open(const char * name, struct io ** ioptr) {
                 static const struct iointf file_intf = {
                     .readat = ktfs_readat,
                     .cntl = ktfs_cntl,
-                    .close = ktfs_close
+                    .close = ktfs_close,
+                    .writeat = ktfs_writeat
                 };
 
 
