@@ -298,21 +298,25 @@ void reset_active_mspace(void) {
         struct pte *lvl2 = active_space_ptab();
         // using macro to compute index into level 2 page table
         unsigned int lvl2_idx = VPN2(address);
+        if (!PTE_VALID(lvl2[lvl2_idx])) continue;
 
         // finding address of level 1 page table by left shifting by PAGE_ORDER
         struct pte *lvl1 = (struct pte *)((uintptr_t)lvl2[lvl2_idx].ppn << PAGE_ORDER);
         // using macro to compute level 1 index
         unsigned int lvl1_idx = VPN1(address);
+        if (!PTE_VALID(lvl1[lvl1_idx])) continue;
 
         // finding address of level 0 page table by left shifting by PAGE_ORDER
         struct pte *lvl0 = (struct pte *)((uintptr_t)lvl1[lvl1_idx].ppn << PAGE_ORDER);
         // using macro to compute level 0 index
         unsigned int lvl0_idx = VPN0(address);
+        if (!PTE_VALID(lvl0[lvl0_idx])) continue;
 
         // checking that lvl0 entry is valid
         if (PTE_VALID(lvl0[lvl0_idx])) {
             // getting current physical page number
             uintptr_t ppn = lvl0[lvl0_idx].ppn;
+            kprintf("lvl0[lvl0_idx].ppn\n");
 
             // converting page number to a pointer to the physical address of the page
             void *phys_page_addr = (void *)((uintptr_t)ppn << PAGE_ORDER);
