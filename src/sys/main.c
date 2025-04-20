@@ -23,7 +23,7 @@ void main(void) {
     int result;
     int i;
     // int tid;
-    void (*exe_entry)(void);
+    // void (*exe_entry)(void);
 
     console_init();
     memory_init(); // added memory initialization
@@ -63,16 +63,21 @@ void main(void) {
         panic("Failed to open trek\n");
     }
 
-    // TODO:
-    // 1. Load the trek file into memory
-    result = elf_load(trekio, &exe_entry);
-    // 2. Verify the loading of the file into memory
-    assert(result == 0);
-    // 3. Run trek on a new thread
-    int tid = thread_spawn("trek_cp2", exe_entry, termio);
+    // // TODO:
+    // // 1. Load the trek file into memory
+    // result = elf_load(trekio, &exe_entry);
+    // // 2. Verify the loading of the file into memory
+    // assert(result == 0);
+    // // 3. Run trek on a new thread
+    // int tid = thread_spawn("trek_cp2", exe_entry, termio);
     
-    // 4. Verify that the thread was able to run properly, if it was have the main thread wait for trek to finish
-    assert(tid > 0);
-    thread_set_process(tid, thread_process(tid));
-    thread_join(0);
+    // // 4. Verify that the thread was able to run properly, if it was have the main thread wait for trek to finish
+    // assert(tid > 0);
+    // thread_set_process(tid, thread_process(tid));
+    // thread_join(0);
+
+    
+    result = process_exec(trekio, 0, NULL);  // No args?
+    assert(result == 0);
+    thread_join(0);  // wait for process 0 (main thread) to exit
 }
