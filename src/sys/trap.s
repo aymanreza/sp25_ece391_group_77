@@ -88,7 +88,13 @@ _smode_trap_entry:
 
         csrrw   sp, sscratch, sp
         beqz    sp, smode_trap_entry_from_smode
+        
 smode_trap_entry_from_umode:
+    # a0 = scause, a1 = trap frame pointer (sp already points to trap frame)
+    csrr a0, scause
+    mv   a1, sp
+    call handle_umode_exception
+    j _smode_trap_entry  # shouldn't return, but just in case
 
 smode_trap_entry_from_smode:
 
