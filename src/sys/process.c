@@ -98,7 +98,7 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
     
     // Reset memory space (clear old mappings and free physical pages)
     reset_active_mspace();
-    kprintf("Successfully Reset Memory Space...\n");
+    // kprintf("Successfully Reset Memory Space...\n");
 
     // Load ELF executable (returns entry point or 0 on failure)
     void (*entry)(void);
@@ -107,7 +107,7 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
         kprintf("ELF LOAD FAILED\n");
         thread_exit();
     }
-    kprintf("Successfully Loaded ELF...\n");
+    // kprintf("Successfully Loaded ELF...\n");
 
     // Allocate and build user stack
     void *stack = alloc_phys_page();
@@ -115,7 +115,7 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
         kprintf("FAILED TO ALLOCATE STACK\n");
         thread_exit();
     }
-    kprintf("Successfully Allocated User Stack...\n");
+    // kprintf("Successfully Allocated User Stack...\n");
 
     map_page(UMEM_END_VMA - PAGE_SIZE, stack, PTE_R | PTE_W | PTE_U);
     int stksz = build_stack(stack, argc, argv);
@@ -123,7 +123,7 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
         kprintf("FAILED TO BUILD USER STACK\n");
         thread_exit();
     }
-    kprintf("Successfully Built User Stack...\n");
+    // kprintf("Successfully Built User Stack...\n");
 
     // Set up trap frame
     struct trap_frame tf = {0};
@@ -136,7 +136,7 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
     // Set argument registers
     tf.a0 = argc;
     tf.a1 = (long)(UMEM_END_VMA - PAGE_SIZE + ((char *)stack + PAGE_SIZE - stksz) - (char *)stack);
-    kprintf("Successfully Built Trapframe...\n");
+    // kprintf("Successfully Built Trapframe...\n");
     kprintf("JUMPING TO USER ENTRY = %p\n", entry);
     // Jump to user mode
     trap_frame_jump(&tf, get_scratch());
@@ -154,6 +154,11 @@ void process_exit(void) {
     if (proc == NULL) //if there is not process, exit thread
         thread_exit();
 
+    // Panic if main thread exits
+    if (running_thread() == 0) {
+        panic("Main process exited");
+    }
+
     // close all open I/O
     for (int i = 0; i < PROCESS_IOMAX; i++) {
         if (proc->iotab[i] != NULL) { //if table spot is used
@@ -163,7 +168,7 @@ void process_exit(void) {
     }
 
     // discard the memory space
-    discard_active_mspace();
+    // discard_active_mspace();
 
     // remove from proctab
     if (proc->idx >= 0 && proc->idx < NPROC)

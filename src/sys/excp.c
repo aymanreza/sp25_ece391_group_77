@@ -88,40 +88,52 @@ void handle_smode_exception(unsigned int cause, struct trap_frame * tfr) {
     panic(msgbuf);
 }
 
+
 void handle_umode_exception(unsigned int cause, struct trap_frame * tfr) {
-    const char * name = NULL;
+    const char *name = NULL;
     char msgbuf[80];
     uintptr_t stval = csrr_stval();
 
     if (0 <= cause && cause < sizeof(excp_names)/sizeof(excp_names[0]))
-		name = excp_names[cause];
+        name = excp_names[cause];
 
-        if (name != NULL) {
-            switch (cause) {
+    if (name != NULL) {
+        switch (cause) {
             case RISCV_SCAUSE_ECALL_FROM_UMODE:
                 handle_syscall(tfr);
-                tfr->sepc += 4;
-                break;
-        
+                kprintf("BACK FROM SYSCALL %ld\n", tfr->a7);
+                return;  // return after successful syscall
+
             case RISCV_SCAUSE_LOAD_PAGE_FAULT:
             case RISCV_SCAUSE_STORE_PAGE_FAULT:
             case RISCV_SCAUSE_INSTR_PAGE_FAULT:
-                if (handle_umode_page_fault(tfr, stval) == 0) { //handle page fault
-                    snprintf(msgbuf, sizeof(msgbuf),
-                    "%s at %p for %p in U mode",
-                    name, (void*)tfr->sepc, stval);
-                    return; 
+            // kprintf("STORE_FAULT: address = %p\n", (void*)stval);
+                if (handle_umode_page_fault(tfr, stval) == 0) {
+                    // handled unsuccessfully
+                    panic("Unhandled store fault");
                 }
+                return;
+
+                // if we failed to handle, fall through and exit
+                snprintf(msgbuf, sizeof(msgbuf),
+                        "%s at %p for %p in U mode",
+                        name, (void*)tfr->sepc, stval);
                 break;
+
             default:
-            snprintf(msgbuf, sizeof(msgbuf),
-                    "%s at %p in U mode",
-                    name, (void*)tfr->sepc);
-            }
-        } else {
-            snprintf(msgbuf, sizeof(msgbuf),
-                "Exception %d at %p in U mode",
-                cause, (void*)tfr->sepc);
+                snprintf(msgbuf, sizeof(msgbuf),
+                         "%s at %p in U mode",
+                         name, (void*)tfr->sepc);
+                break;
         }
-        process_exit(); //exit process
+    } else {
+        snprintf(msgbuf, sizeof(msgbuf),
+                 "Exception %d at %p in U mode",
+                 cause, (void*)tfr->sepc);
+    }
+
+    if (current_process() != NULL) {
+        kprintf("UNHANDLED EXCEPTION: %s\n", msgbuf);
+    }
+    process_exit();  // only exit on unhandled exceptions
 }

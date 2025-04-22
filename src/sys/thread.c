@@ -129,7 +129,7 @@ struct thread {
 //helpers
 
 char * get_scratch(void) {
-    return (char *)TP->stack_anchor - sizeof(struct trap_frame);
+    return (char *)TP->stack_anchor;
 }
 
 // INTERNAL FUNCTION DECLARATIONS
@@ -808,7 +808,9 @@ void lock_release(struct lock * lock) {
     int pie = disable_interrupts();
 
     // making sure the currently running thread is the lock's owner
+    // kprintf("lock->owner = %p, TP = %p\n", lock->owner, TP);
     assert(lock->owner == TP);
+    // assert(lock->owner->id == TP->id);
 
     // if the lock's access count is greater than one, decrement count, restore interrupts and return
     if (lock->count > 1) {

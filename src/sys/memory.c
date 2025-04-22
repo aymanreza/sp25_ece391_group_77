@@ -604,6 +604,8 @@ int handle_umode_page_fault(struct trap_frame * tfr, uintptr_t vma) {
         return 0;
     }
 
+    vma = ROUND_DOWN(vma, PAGE_SIZE);
+
     // allocating a new physical page
     void *new_page = alloc_phys_page();
     assert(new_page != NULL);

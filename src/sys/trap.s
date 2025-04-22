@@ -90,11 +90,60 @@ _smode_trap_entry:
         beqz    sp, smode_trap_entry_from_smode
         
 smode_trap_entry_from_umode:
-    # a0 = scause, a1 = trap frame pointer (sp already points to trap frame)
-    csrr a0, scause
-    mv   a1, sp
-    call handle_umode_exception
-    j _smode_trap_entry  # shouldn't return, but just in case
+
+        mv t3, sp            # store anchor in t3
+        addi sp, sp, -TFRSZ  # allocate space
+        ld   tp, KTP(t3)     # recover tp
+        ld   gp, KGP(t3)     # recover gp
+
+        # Save general-purpose registers into the trap frame
+        sd      a0, A0(sp)
+        sd      a1, A1(sp)
+        sd      a2, A2(sp)
+        sd      a3, A3(sp)
+        sd      a4, A4(sp)
+        sd      a5, A5(sp)
+        sd      a6, A6(sp)
+        sd      a7, A7(sp)
+        sd      t0, T0(sp)
+        sd      t1, T1(sp)
+        sd      t2, T2(sp)
+        sd      t3, T3(sp)
+        sd      t4, T4(sp)
+        sd      t5, T5(sp)
+        sd      t6, T6(sp)
+        sd      s1, S1(sp)
+        sd      s2, S2(sp)
+        sd      s3, S3(sp)
+        sd      s4, S4(sp)
+        sd      s5, S5(sp)
+        sd      s6, S6(sp)
+        sd      s7, S7(sp)
+        sd      s8, S8(sp)
+        sd      s9, S9(sp)
+        sd      s10, S10(sp)
+        sd      s11, S11(sp)
+        sd      ra, RA(sp)
+        sd      fp, FP(sp)
+
+        # Capture retired instruction counter and save it in trap frame
+        rdinstret t6
+        sd      t6, SINSTRET(sp)
+
+        # Save sstatus and sepc CSRs
+        csrr    t6, sstatus
+        sd      t6, SSTATUS(sp)
+        csrr    t6, sepc
+        sd      t6, SEPC(sp)
+
+        addi    fp, sp, TFRSZ
+
+        # Set up args for C handler
+        csrr    a0, scause
+        mv      a1, sp
+        call    handle_umode_exception
+        j       trap_return
+
 
 smode_trap_entry_from_smode:
 
@@ -161,7 +210,7 @@ smode_trap_entry_from_smode:
         # this address in _ra_ before we jump to an exception or trap handler.
         # Restore all GPRs except _gp_ and _tp_ (not saved/restored in S mode),
         # _sp_ (restored last) and _t6_ (used as temporary).
-        
+trap_return:        
         ld      a0, A0(sp)
         ld      a1, A1(sp)
         ld      a2, A2(sp)
@@ -189,6 +238,7 @@ smode_trap_entry_from_smode:
         ld      s11, S11(sp)
         ld      ra, RA(sp)
         ld      fp, FP(sp)
+
 
         # We need interrupts disabled after restoring _sepc_ so that it does not
         # get clobbered by another trap entry. Restore _sstatus_ first, which
