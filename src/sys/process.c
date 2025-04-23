@@ -125,6 +125,12 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
     }
     // kprintf("Successfully Built User Stack...\n");
 
+    //  Copy I/O args into process->iotab after memory reset
+    for (int i = 0; i < argc && i < PROCESS_IOMAX; i++) {
+        proc->iotab[i] = (struct io *)argv[i];
+        if (proc->iotab[i]) ioaddref(proc->iotab[i]);
+    }
+
     // Set up trap frame
     struct trap_frame tf = {0};
     tf.sp = (void *)(UMEM_END_VMA - stksz); // user stack top
