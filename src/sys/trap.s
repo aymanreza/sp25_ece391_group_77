@@ -91,58 +91,104 @@ _smode_trap_entry:
         
 smode_trap_entry_from_umode:
 
-        mv t3, sp            # store anchor in t3
-        addi sp, sp, -TFRSZ  # allocate space
-        ld   tp, KTP(t3)     # recover tp
-        ld   gp, KGP(t3)     # recover gp
+        # clear sscratch because now running in S‑mode.
 
-        # Save general-purpose registers into the trap frame
-        sd      a0, A0(sp)
-        sd      a1, A1(sp)
-        sd      a2, A2(sp)
-        sd      a3, A3(sp)
-        sd      a4, A4(sp)
-        sd      a5, A5(sp)
-        sd      a6, A6(sp)
-        sd      a7, A7(sp)
-        sd      t0, T0(sp)
-        sd      t1, T1(sp)
-        sd      t2, T2(sp)
-        sd      t3, T3(sp)
-        sd      t4, T4(sp)
-        sd      t5, T5(sp)
-        sd      t6, T6(sp)
-        sd      s1, S1(sp)
-        sd      s2, S2(sp)
-        sd      s3, S3(sp)
-        sd      s4, S4(sp)
-        sd      s5, S5(sp)
-        sd      s6, S6(sp)
-        sd      s7, S7(sp)
-        sd      s8, S8(sp)
-        sd      s9, S9(sp)
-        sd      s10, S10(sp)
+        # ld      tp, 0(sp)             # load current thread
+        addi    sp, sp, -TFRSZ          # allocate trap‑frame
+
+        # Save caller‑saved & callee‑saved GPRs
+        sd      a0,  A0(sp)   
+        sd      a1,  A1(sp)   
+        sd      a2,  A2(sp)   
+        sd      a3,  A3(sp)
+        sd      a4,  A4(sp)   
+        sd      a5,  A5(sp)   
+        sd      a6,  A6(sp)   
+        sd      a7,  A7(sp)
+        sd      t0,  T0(sp)   
+        sd      t1,  T1(sp)   
+        sd      t2,  T2(sp)   
+        sd      t3,  T3(sp)
+        sd      t4,  T4(sp)   
+        sd      t5,  T5(sp)   
+        sd      t6,  T6(sp)
+        sd      s1,  S1(sp)   
+        sd      s2,  S2(sp)   
+        sd      s3,  S3(sp)   
+        sd      s4,  S4(sp)
+        sd      s5,  S5(sp)   
+        sd      s6,  S6(sp)   
+        sd      s7,  S7(sp)   
+        sd      s8,  S8(sp)
+        sd      s9,  S9(sp)   
+        sd      s10, S10(sp)  
         sd      s11, S11(sp)
-        sd      ra, RA(sp)
-        sd      fp, FP(sp)
+        sd      ra,  RA(sp)   
+        sd      fp,  FP(sp)
 
-        # Capture retired instruction counter and save it in trap frame
+        # Counters & CSRs
         rdinstret t6
         sd      t6, SINSTRET(sp)
 
-        # Save sstatus and sepc CSRs
         csrr    t6, sstatus
         sd      t6, SSTATUS(sp)
         csrr    t6, sepc
         sd      t6, SEPC(sp)
 
-        addi    fp, sp, TFRSZ
+        addi    fp, sp, TFRSZ # establish frame pointer
 
-        # Set up args for C handler
+        # Call C‑handlers 
+        # a0 = scause, a1 = &trap_frame
         csrr    a0, scause
         mv      a1, sp
-        call    handle_umode_exception
-        j       trap_return
+        bltz    a0, 1f                  # msb = 1 interrupt
+        call    handle_umode_exception  # will ret back here
+        j       2f
+1:      # interrupt path (clear msb before dispatch)
+        slli    a0, a0, 1
+        srli    a0, a0, 1
+        call    handle_umode_interrupt
+2:
+
+        # Restore all saved registers (except gp/tp)
+        ld      a0,  A0(sp)   
+        ld      a1,  A1(sp)   
+        ld      a2,  A2(sp)   
+        ld      a3,  A3(sp)
+        ld      a4,  A4(sp)   
+        ld      a5,  A5(sp)   
+        ld      a6,  A6(sp)   
+        ld      a7,  A7(sp)
+        ld      t0,  T0(sp)   
+        ld      t1,  T1(sp)   
+        ld      t2,  T2(sp)   
+        ld      t3,  T3(sp)
+        ld      t4,  T4(sp)   
+        ld      t5,  T5(sp)
+        ld      s1,  S1(sp)   
+        ld      s2,  S2(sp)   
+        ld      s3,  S3(sp)   
+        ld      s4,  S4(sp)
+        ld      s5,  S5(sp)   
+        ld      s6,  S6(sp)   
+        ld      s7,  S7(sp)   
+        ld      s8,  S8(sp)
+        ld      s9,  S9(sp)   
+        ld      s10, S10(sp)  
+        ld      s11, S11(sp)
+        ld      ra,  RA(sp)   
+        ld      fp,  FP(sp)
+
+        # Restore CSR state 
+        ld      t6, SSTATUS(sp)
+        csrw    sstatus, t6
+        ld      t6, SEPC(sp)
+        csrw    sepc,    t6
+
+        # Pop frame, restore t6, and return
+        ld      t6, T6(sp)
+        addi    sp, sp, TFRSZ
+        sret  # back to S‑mode caller
 
 
 smode_trap_entry_from_smode:
@@ -210,7 +256,7 @@ smode_trap_entry_from_smode:
         # this address in _ra_ before we jump to an exception or trap handler.
         # Restore all GPRs except _gp_ and _tp_ (not saved/restored in S mode),
         # _sp_ (restored last) and _t6_ (used as temporary).
-trap_return:        
+        
         ld      a0, A0(sp)
         ld      a1, A1(sp)
         ld      a2, A2(sp)

@@ -606,12 +606,24 @@ int handle_umode_page_fault(struct trap_frame * tfr, uintptr_t vma) {
 
     vma = ROUND_DOWN(vma, PAGE_SIZE);
 
+    unsigned long long cause = csrr_scause();
+
+    int flags = PTE_R | PTE_U;
+
+
+    if (cause == RISCV_SCAUSE_STORE_PAGE_FAULT) {
+        flags |= PTE_W;
+    }
+
+    if (cause == RISCV_SCAUSE_INSTR_PAGE_FAULT) {
+        flags |= PTE_X;
+    }
     // allocating a new physical page
     void *new_page = alloc_phys_page();
     assert(new_page != NULL);
 
     // mapping the new page with given vma and user-mode flags
-    map_page(vma, new_page, PTE_R | PTE_W | PTE_U);
+    map_page(vma, new_page, flags);
 
     return 1; // signaling handled fault
 }

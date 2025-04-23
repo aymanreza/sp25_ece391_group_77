@@ -132,10 +132,12 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
     kprintf("Expected tf.sp = 0x%x\n", (uintptr_t)(UMEM_END_VMA - stksz));
     tf.ra = entry; // jump to ELF entry point
     tf.sepc = entry;  // program counter
+    tf.sstatus = ((RISCV_SSTATUS_SPIE | RISCV_SSTATUS_SUM )); //SPIE enables U-int on return and then SUM allows kernel to touch U pages
+    tf.tp = current_thread();
 
     // Set argument registers
     tf.a0 = argc;
-    tf.a1 = (long)(UMEM_END_VMA - PAGE_SIZE + ((char *)stack + PAGE_SIZE - stksz) - (char *)stack);
+    tf.a1 = (uintptr_t)tf.sp; // where argv is in user stack
     // kprintf("Successfully Built Trapframe...\n");
     kprintf("JUMPING TO USER ENTRY = %p\n", entry);
     // Jump to user mode

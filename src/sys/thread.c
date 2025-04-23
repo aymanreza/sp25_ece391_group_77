@@ -110,6 +110,10 @@ struct thread {
 
 #define TP ((struct thread*)__builtin_thread_pointer())
 
+struct thread* current_thread(void) { 
+    return TP;
+}
+
 
 // Macro for changing thread state. If compiled for debugging (DEBUG is
 // defined), prints function that changed thread state.
@@ -129,7 +133,7 @@ struct thread {
 //helpers
 
 char * get_scratch(void) {
-    return (char *)TP->stack_anchor;
+    return (char *)TP->stack_anchor - sizeof(struct trap_frame);
 }
 
 // INTERNAL FUNCTION DECLARATIONS

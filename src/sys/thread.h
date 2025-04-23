@@ -137,4 +137,6 @@ extern void thread_set_process(int tid, struct process * proc);
 
 extern char * get_scratch(void);
 
+extern struct thread* current_thread(void);
+
 #endif // _THREAD_H_

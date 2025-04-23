@@ -112,4 +112,4 @@ run-test: test-main.elf
 	$(QEMU) $(QEMUOPTS) -m 8M -kernel $<
 
 run-gdb: kernel.elf
-	$(QEMU) $(QEMUOPTS) -m 8M -kernel $< -s -S
+	$(QEMU) $(QEMUOPTS) -m 8M -kernel $< -gdb tcp::1235 -S
