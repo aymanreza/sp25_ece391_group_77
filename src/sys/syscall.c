@@ -138,7 +138,7 @@ static int allocate_fd(int fd, struct io * io) {
 
 
 int64_t syscall(const struct trap_frame * tfr) {
-    kprintf("SYSCALL #%ld, a0=%p\n", tfr->a7, tfr->a0);
+    // kprintf("SYSCALL #%ld, a0=%p\n", tfr->a7, tfr->a0);
     switch(tfr->a7) { // a7 is where the system call number is
         case(SYSCALL_EXIT):
             return sysexit();

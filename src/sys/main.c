@@ -76,8 +76,10 @@ void main(void) {
     // thread_set_process(tid, thread_process(tid));
     // thread_join(0);
 
-    
-    result = process_exec(trekio, 0, NULL);  // No args?
+    //Flexio said on discord: quick thing, trek takes in a termio as an argument just to help whoever is struggling with running trek??????
+    void *argv[1];
+    argv[0] = termio;
+    result = process_exec(trekio, 1, (char **)argv);
     assert(result == 0);
     thread_join(0);  // wait for process 0 (main thread) to exit
 }

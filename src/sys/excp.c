@@ -101,7 +101,7 @@ void handle_umode_exception(unsigned int cause, struct trap_frame * tfr) {
         switch (cause) {
             case RISCV_SCAUSE_ECALL_FROM_UMODE:
                 handle_syscall(tfr);
-                kprintf("BACK FROM SYSCALL %ld\n", tfr->a7);
+                // kprintf("BACK FROM SYSCALL %ld\n", tfr->a7);
                 return;  // return after successful syscall
 
             case RISCV_SCAUSE_LOAD_PAGE_FAULT:

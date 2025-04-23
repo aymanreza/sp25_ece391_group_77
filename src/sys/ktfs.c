@@ -306,7 +306,7 @@ int ktfs_open(const char * name, struct io ** ioptr) {
 
 
                 ioinit1(&file->io, &file_intf);
-                *ioptr = &file->io; // io pointer to be updated to the file io object we created
+                *ioptr = create_seekable_io(&file->io); // io pointer to be updated to the file io object we created
                 lock_release(&fs.fs_lock);
                 return 0;
             }

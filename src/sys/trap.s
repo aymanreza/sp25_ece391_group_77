@@ -90,41 +90,45 @@ _smode_trap_entry:
         beqz    sp, smode_trap_entry_from_smode
         
 smode_trap_entry_from_umode:
+        # sp contains kernel stack pointer, sscratch contains user stack pointer
+        addi    sp, sp, -TFRSZ     # allocate trap‑frame
+        sd      a0, A0(sp)         # save a0 first as we need it as temporary
+        
+        # Save user stack pointer from sscratch
+        csrr    a0, sscratch       # get user SP from sscratch
+        sd      a0, SP(sp)         # store user SP in trap frame
+        csrw    sscratch, zero     # clear sscratch to indicate we're in S-mode
 
-        # clear sscratch because now running in S‑mode.
-
-        # ld      tp, 0(sp)             # load current thread
-        addi    sp, sp, -TFRSZ          # allocate trap‑frame
-
-        # Save caller‑saved & callee‑saved GPRs
-        sd      a0,  A0(sp)   
-        sd      a1,  A1(sp)   
-        sd      a2,  A2(sp)   
-        sd      a3,  A3(sp)
-        sd      a4,  A4(sp)   
-        sd      a5,  A5(sp)   
-        sd      a6,  A6(sp)   
-        sd      a7,  A7(sp)
-        sd      t0,  T0(sp)   
-        sd      t1,  T1(sp)   
-        sd      t2,  T2(sp)   
-        sd      t3,  T3(sp)
-        sd      t4,  T4(sp)   
-        sd      t5,  T5(sp)   
-        sd      t6,  T6(sp)
-        sd      s1,  S1(sp)   
-        sd      s2,  S2(sp)   
-        sd      s3,  S3(sp)   
-        sd      s4,  S4(sp)
-        sd      s5,  S5(sp)   
-        sd      s6,  S6(sp)   
-        sd      s7,  S7(sp)   
-        sd      s8,  S8(sp)
-        sd      s9,  S9(sp)   
+        # save caller‑saved & callee‑saved GPRs
+        sd      a1, A1(sp)   
+        sd      a2, A2(sp)   
+        sd      a3, A3(sp)
+        sd      a4, A4(sp)   
+        sd      a5, A5(sp)   
+        sd      a6, A6(sp)   
+        sd      a7, A7(sp)
+        sd      t0, T0(sp)   
+        sd      t1, T1(sp)   
+        sd      t2, T2(sp)   
+        sd      t3, T3(sp)
+        sd      t4, T4(sp)   
+        sd      t5, T5(sp)   
+        sd      t6, T6(sp)
+        sd      s1, S1(sp)   
+        sd      s2, S2(sp)   
+        sd      s3, S3(sp)   
+        sd      s4, S4(sp)
+        sd      s5, S5(sp)   
+        sd      s6, S6(sp)   
+        sd      s7, S7(sp)   
+        sd      s8, S8(sp)
+        sd      s9, S9(sp)   
         sd      s10, S10(sp)  
         sd      s11, S11(sp)
-        sd      ra,  RA(sp)   
-        sd      fp,  FP(sp)
+        sd      ra, RA(sp)
+        sd      gp, GP(sp)   # save user GP
+        sd      tp, TP(sp)   # save user TP   
+        sd      fp, FP(sp)
 
         # Counters & CSRs
         rdinstret t6
@@ -150,45 +154,54 @@ smode_trap_entry_from_umode:
         call    handle_umode_interrupt
 2:
 
-        # Restore all saved registers (except gp/tp)
-        ld      a0,  A0(sp)   
-        ld      a1,  A1(sp)   
-        ld      a2,  A2(sp)   
-        ld      a3,  A3(sp)
-        ld      a4,  A4(sp)   
-        ld      a5,  A5(sp)   
-        ld      a6,  A6(sp)   
-        ld      a7,  A7(sp)
-        ld      t0,  T0(sp)   
-        ld      t1,  T1(sp)   
-        ld      t2,  T2(sp)   
-        ld      t3,  T3(sp)
-        ld      t4,  T4(sp)   
-        ld      t5,  T5(sp)
-        ld      s1,  S1(sp)   
-        ld      s2,  S2(sp)   
-        ld      s3,  S3(sp)   
-        ld      s4,  S4(sp)
-        ld      s5,  S5(sp)   
-        ld      s6,  S6(sp)   
-        ld      s7,  S7(sp)   
-        ld      s8,  S8(sp)
-        ld      s9,  S9(sp)   
+        # Restore all saved registers
+        ld      a0, A0(sp)   
+        ld      a1, A1(sp)   
+        ld      a2, A2(sp)   
+        ld      a3, A3(sp)
+        ld      a4, A4(sp)   
+        ld      a5, A5(sp)   
+        ld      a6, A6(sp)   
+        ld      a7, A7(sp)
+        ld      t0, T0(sp)   
+        ld      t1, T1(sp)   
+        ld      t2, T2(sp)   
+        ld      t3, T3(sp)
+        ld      t4, T4(sp)   
+        ld      t5, T5(sp)
+        ld      s1, S1(sp)   
+        ld      s2, S2(sp)   
+        ld      s3, S3(sp)   
+        ld      s4, S4(sp)
+        ld      s5, S5(sp)   
+        ld      s6, S6(sp)   
+        ld      s7, S7(sp)   
+        ld      s8, S8(sp)
+        ld      s9, S9(sp)   
         ld      s10, S10(sp)  
         ld      s11, S11(sp)
-        ld      ra,  RA(sp)   
-        ld      fp,  FP(sp)
+        ld      ra, RA(sp)   
+        ld      fp, FP(sp)
+        ld      gp, GP(sp)   # restore user GP
+        ld      tp, TP(sp)   # restore user TP
 
-        # Restore CSR state 
+        # Make sure interrupts are disabled before restoring critical CSRs
+        csrci   sstatus, 2    # Clear SIE bit
+
+        # Restore CSR state
+        ld      t6, SEPC(sp)
+        csrw    sepc, t6
         ld      t6, SSTATUS(sp)
         csrw    sstatus, t6
-        ld      t6, SEPC(sp)
-        csrw    sepc,    t6
 
-        # Pop frame, restore t6, and return
+        # Set up sscratch for next trap entry from U-mode
+        addi    t0, sp, TFRSZ     # calculate address of next trap frame
+        csrw    sscratch, t0   # store it in sscratch
+
+        # Restore user stack pointer and t6 last
         ld      t6, T6(sp)
-        addi    sp, sp, TFRSZ
-        sret  # back to S‑mode caller
+        ld      sp, SP(sp)      # restore user stack pointer
+        sret              # return to user mode
 
 
 smode_trap_entry_from_smode:
