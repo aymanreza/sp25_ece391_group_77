@@ -1,9 +1,10 @@
 #include "conf.h"
-#include "heap.h"
 #include "console.h"
 #include "elf.h"
 #include "assert.h"
 #include "thread.h"
+#include "process.h"
+#include "memory.h"
 #include "fs.h"
 #include "io.h"
 #include "device.h"
@@ -11,26 +12,29 @@
 #include "dev/uart.h"
 #include "intr.h"
 #include "dev/virtio.h"
-#include "memory.h"
-#include "process.h"
+#include "heap.h"
+#include "string.h"
 
 #define VIRTIO_MMIO_STEP (VIRTIO1_MMIO_BASE-VIRTIO0_MMIO_BASE)
 extern char _kimg_end[]; 
+
+
+
+
 void main(void) {
     struct io *blkio;
-    struct io *termio;
-    struct io *trekio;
     int result;
     int i;
-    // int tid;
-    // void (*exe_entry)(void);
 
+    
     console_init();
-    memory_init(); // added memory initialization
     devmgr_init();
     intrmgr_init();
     thrmgr_init();
-    procmgr_init(); // added process manager initialization
+    memory_init();
+    procmgr_init();
+
+
     uart_attach((void*)UART0_MMIO_BASE, UART0_INTR_SRCNO+0);
     uart_attach((void*)UART1_MMIO_BASE, UART0_INTR_SRCNO+1);
     rtc_attach((void*)RTC_MMIO_BASE);
@@ -51,38 +55,40 @@ void main(void) {
         panic("Failed to mount filesystem\n");
     }
 
-    result = open_device("uart", 1, &termio);
+    result = open_device("uart", 1, &current_process()->iotab[2]);
     if (result < 0) {
         kprintf("Error: %d\n", result);
-        panic("Failed to open UART\n");
+        panic("Failed to open uart");
     }
 
-    result = fsopen("trek_cp2", &trekio);
-    if (result < 0) {
-        kprintf("Error: %d\n", result);
-        panic("Failed to open trek\n");
-    }
+    // insert testcase below
 
-    // // TODO:
-    // // 1. Load the trek file into memory
-    // result = elf_load(trekio, &exe_entry);
-    // // 2. Verify the loading of the file into memory
+    // Launch trek_cp2
+    // struct io *trekio;
+    // result = fsopen("trek_cp2", &trekio);
+    // if (result < 0) panic("Failed to open trek_cp2");
+    // result = process_exec(trekio, 0, NULL);
     // assert(result == 0);
-    // // 3. Run trek on a new thread
-    // int tid = thread_spawn("trek_cp2", exe_entry, termio);
-    
-    // // 4. Verify that the thread was able to run properly, if it was have the main thread wait for trek to finish
-    // assert(tid > 0);
-    // thread_set_process(tid, thread_process(tid));
     // thread_join(0);
 
-    //Flexio said on discord: quick thing, trek takes in a termio as an argument just to help whoever is struggling with running trek??????
-    void *argv[3];
-    
-    argv[0] = termio;
-    argv[1] = termio;
-    argv[2] = termio;
-    result = process_exec(trekio, 3, (char **)argv);
+    // Launch zork 
+    struct io *zorkio;
+    result = fsopen("zork", &zorkio);
+    if (result < 0) panic("Failed to open zork");
+    result = process_exec(zorkio, 0, NULL); 
     assert(result == 0);
-    thread_join(0);  // wait for process 0 (main thread) to exit
+    thread_join(0);
+
+    // Launch rogue with filename "roguesave.dat" as argv[1]
+    // struct io *rogueio;
+    // result = fsopen("rogue", &rogueio);
+    // if (result < 0) panic("Failed to open rogue");
+    // char *rogue_argv[3];
+    // rogue_argv[0] = (char *)"rogue";
+    // rogue_argv[1] = (char *)"roguesave.dat";
+    // rogue_argv[2] = NULL;
+    // result = process_exec(rogueio, 2, rogue_argv);
+    // assert(result == 0);
+    // thread_join(0);
+    
 }

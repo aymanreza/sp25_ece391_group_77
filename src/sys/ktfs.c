@@ -255,6 +255,7 @@ int ktfs_mount(struct io * io) {
 // Side Effects: it may perfrom multiple block read from the backing device, allocate memory for the file structure,
 //and acquires for the global file lock.
 int ktfs_open(const char * name, struct io ** ioptr) {
+    kprintf("ktfs_open: trying to open '%s'\n", name);
     // checking validity of arguments
     if (!name || !ioptr) return -EINVAL; //error, invalid aguments
 
@@ -284,6 +285,7 @@ int ktfs_open(const char * name, struct io ** ioptr) {
 
             if (strcmp(dentries[j].name, name) == 0) { //comparing the name to parsed name
                 // found the file, now load its inode
+                kprintf("found file\n");
                 struct ktfs_inode file_inode;
                 ret = ktfs_read_inode(dentries[j].inode, &file_inode); // save inode to driver
                 if (ret < 0){lock_release(&fs.fs_lock); return ret;} //fail

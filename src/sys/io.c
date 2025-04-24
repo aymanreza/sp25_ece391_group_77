@@ -375,6 +375,7 @@ int memio_cntl(struct io * io, int cmd, void * arg) {
 
 void seekio_close(struct io * io) {
     struct seekio * const sio = (void*)io - offsetof(struct seekio, io);
+    sio->bkgio->refcnt--;
     ioclose(sio->bkgio);
     kfree(sio);
 }
