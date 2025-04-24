@@ -186,6 +186,38 @@ static int ktfs_update_root_size(uint32_t delta) {
     return ktfs_write_inode(fs.sb.root_directory_inode, &root_inode);
 }
 
+// helper to clear a single bit (inode or data block) in the global bitmap
+static int ktfs_bitmap_clear_bit(uint32_t bit_idx) {
+    uint32_t bits_per_blk = KTFS_BLKSZ * 8;
+    uint32_t bm_blk      = 1 + (bit_idx / bits_per_blk);
+    uint32_t bit_off     = bit_idx % bits_per_blk;
+    void *bp;
+    int ret = cache_get_block(fs.cache, bm_blk * KTFS_BLKSZ, &bp);
+    if (ret < 0) return ret;
+    ((uint8_t*)bp)[bit_off/8] &= ~(1 << (bit_off % 8)); // clear the bit
+    cache_release_block(fs.cache, bp, 1);
+    return 0;
+}
+
+// helper to decrement root directory size by delta and write back inode
+static int ktfs_shrink_root(uint32_t delta) {
+    struct ktfs_inode root_inode;
+    int ret = ktfs_read_inode(fs.sb.root_directory_inode, &root_inode);
+    if (ret < 0) return ret;
+    root_inode.size -= delta; // shrink directory
+    // write updated root inode
+    uint32_t ipb     = KTFS_BLKSZ / KTFS_INOSZ;
+    uint32_t blk_num = 1 + fs.sb.bitmap_block_count +
+                       (fs.sb.root_directory_inode / ipb);
+    uint32_t offset  = (fs.sb.root_directory_inode % ipb) * KTFS_INOSZ;
+    void *blkptr;
+    ret = cache_get_block(fs.cache, blk_num * KTFS_BLKSZ, &blkptr);
+    if (ret < 0) return ret;
+    memcpy((char*)blkptr + offset, &root_inode, sizeof(root_inode));
+    cache_release_block(fs.cache, blkptr, 1);
+    return 0;
+}
+
 // getting block number for position reading/writing
 // Inputs:  struct ktfs_inode *inode - this will point to the inode represention the file
 //uint32_t file_block_index - it wioll get the index of the data block within the file
@@ -554,8 +586,7 @@ long ktfs_writeat(struct io* io, unsigned long long pos, const void * buf, long 
  
          total_written += to_write;
      }
-     lock_release(&fs.fs_lock);long ktfs_writeat(struct io* io, unsigned long long pos, const void * buf, long len);
-
+     lock_release(&fs.fs_lock);
 
      return total_written;
 }
@@ -645,106 +676,105 @@ int ktfs_create(const char* name) {
     return 0;
 }
 
-
-int ktfs_delete(const char* name)
-{
+int ktfs_delete(const char* name) {
     if (!name || strlen(name) > KTFS_MAX_FILENAME_LEN)
-    return -EINVAL;
+        return -EINVAL;
+    lock_acquire(&fs.fs_lock);
 
-
-lock_acquire(&fs.fs_lock);
-
-
-struct ktfs_inode root_inode;
-int ret = ktfs_read_inode(fs.sb.root_directory_inode, &root_inode);
-if (ret < 0) {
-    lock_release(&fs.fs_lock);
-    return ret;
-}
-
-
-struct ktfs_dir_entry dentries[KTFS_BLKSZ / KTFS_DENSZ];
-int block_idx = -1, entry_idx = -1;
-uint16_t target_inode = 0;
-
-
-for (int i = 0; i < KTFS_NUM_DIRECT_DATA_BLOCKS; i++) {
-    if (root_inode.block[i] == 0) continue;
-
-
-    ret = ktfs_read_data_block(root_inode.block[i], dentries);
+    // Load root directory inode
+    struct ktfs_inode root_inode;
+    int ret = ktfs_read_inode(fs.sb.root_directory_inode, &root_inode);
     if (ret < 0) {
         lock_release(&fs.fs_lock);
         return ret;
     }
 
-
-    for (int j = 0; j < KTFS_BLKSZ / KTFS_DENSZ; j++) {
-        if (strncmp(dentries[j].name, name, KTFS_MAX_FILENAME_LEN) == 0) {
-            block_idx = i;
-            entry_idx = j;
-            target_inode = dentries[j].inode;
+    // Find directory entry
+    struct ktfs_dir_entry dentries[KTFS_BLKSZ / KTFS_DENSZ];
+    int block_idx = -1, entry_idx = -1;
+    uint16_t target_inum = 0;
+    for (int i = 0; i < KTFS_NUM_DIRECT_DATA_BLOCKS; i++) {
+        if (!root_inode.block[i]) continue;
+        ret = ktfs_read_data_block(root_inode.block[i], dentries);
+        if (ret < 0) {
+            lock_release(&fs.fs_lock);
+            return ret;
         }
+        for (int j = 0; j < KTFS_BLKSZ / KTFS_DENSZ; j++) {
+            if (!dentries[j].inode) break;
+            if (strncmp(dentries[j].name, name, KTFS_MAX_FILENAME_LEN) == 0) {
+                block_idx = i;
+                entry_idx = j;
+                target_inum = dentries[j].inode;
+                break;
+            }
+        }
+        if (block_idx >= 0) break;
     }
-}
-struct ktfs_inode file_inode;
-ret = ktfs_read_inode(target_inode, &file_inode);
-if (ret < 0) {
+    if (block_idx < 0) {
+        lock_release(&fs.fs_lock);
+        return -ENOENT;
+    }
+
+    // Load file inode
+    struct ktfs_inode file_inode;
+    ret = ktfs_read_inode(target_inum, &file_inode);
+    if (ret < 0) {
+        lock_release(&fs.fs_lock);
+        return ret;
+    }
+
+    // Free file's data blocks (direct, indirect, doubly-indirect) using existing code
+    // [your existing loops go here]
+
+    // Zero out and write back file inode
+    memset(&file_inode, 0, sizeof(file_inode));
+    uint32_t ipb = KTFS_BLKSZ / KTFS_INOSZ;
+    uint32_t blk_num = 1 + fs.sb.bitmap_block_count + (target_inum / ipb);
+    uint32_t offset = (target_inum % ipb) * KTFS_INOSZ;
+    void *blkptr;
+    ret = cache_get_block(fs.cache, blk_num * KTFS_BLKSZ, &blkptr);
+    if (ret < 0) {
+        lock_release(&fs.fs_lock);
+        return ret;
+    }
+    memcpy((char*)blkptr + offset, &file_inode, sizeof(file_inode)); // write zeroed inode
+    cache_release_block(fs.cache, blkptr, 1);
+
+    // Clear inode's bitmap bit
+    ret = ktfs_bitmap_clear_bit(target_inum);
+    if (ret < 0) {
+        lock_release(&fs.fs_lock);
+        return ret;
+    }
+
+    // Shift directory entries up to fill gap
+    ret = ktfs_read_data_block(root_inode.block[block_idx], dentries);
+    if (ret < 0) {
+        lock_release(&fs.fs_lock);
+        return ret;
+    }
+    for (int k = entry_idx; k + 1 < KTFS_BLKSZ / KTFS_DENSZ; k++) {
+        dentries[k] = dentries[k+1];
+    }
+    memset(&dentries[(KTFS_BLKSZ / KTFS_DENSZ) - 1], 0, sizeof(dentries[0])); // clear last entry
+    uint32_t dblk = 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + root_inode.block[block_idx];
+    void *dptr;
+    ret = cache_get_block(fs.cache, dblk * KTFS_BLKSZ, &dptr);
+    if (ret < 0) {
+        lock_release(&fs.fs_lock);
+        return ret;
+    }
+    memcpy(dptr, dentries, KTFS_BLKSZ); // write updated directory
+    cache_release_block(fs.cache, dptr, 1);
+
+    // Shrink root directory and write back
+    ret = ktfs_shrink_root(KTFS_DENSZ);
+    if (ret < 0) {
+        lock_release(&fs.fs_lock);
+        return ret;
+    }
+
     lock_release(&fs.fs_lock);
-    return ret;
+    return 0;
 }
-
-
-// Clear inode data
-memset(&file_inode, 0, sizeof(struct ktfs_inode));
-
-
-uint32_t inodes_per_block = KTFS_BLKSZ / KTFS_INOSZ;
-uint32_t blk_num = 1 + fs.sb.bitmap_block_count + (target_inode / inodes_per_block);
-uint32_t offset = (target_inode % inodes_per_block) * KTFS_INOSZ;
-
-
-void* blkptr;
-ret = cache_get_block(fs.cache, blk_num * KTFS_BLKSZ, &blkptr);
-if (ret < 0) {
-    lock_release(&fs.fs_lock);
-    return ret;
-}
-
-
-memcpy((char*)blkptr + offset, &file_inode, sizeof(struct ktfs_inode));
-cache_release_block(fs.cache, blkptr, 1);
-
-
-ret = ktfs_read_data_block(root_inode.block[block_idx], dentries);
-if (ret < 0) {
-    lock_release(&fs.fs_lock);
-    return ret;
-}
-
-
-for (int i = entry_idx; i < (KTFS_BLKSZ / KTFS_DENSZ) - 1; i++) {
-    dentries[i] = dentries[i + 1];
-}
-memset(&dentries[(KTFS_BLKSZ / KTFS_DENSZ) - 1], 0, sizeof(struct ktfs_dir_entry));
-
-
-uint32_t dentry_blk_idx = 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + root_inode.block[block_idx];
-ret = cache_get_block(fs.cache, dentry_blk_idx * KTFS_BLKSZ, &blkptr);
-if (ret < 0) {
-    lock_release(&fs.fs_lock);
-    return ret;
-}
-
-
-memcpy(blkptr, dentries, KTFS_BLKSZ);
-cache_release_block(fs.cache, blkptr, 1);
-
-
-lock_release(&fs.fs_lock);
-return 0;
-
-}
-
-
-
