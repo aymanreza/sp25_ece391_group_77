@@ -249,7 +249,7 @@ int sysclose(int fd) {
     // clear the slot 
     current_process()->iotab[fd] = NULL;
     
-    io->intf->close(io); // calling close from io abstraction
+    ioclose(io); // calling close from io abstraction
     return 0; //success
 }
 
