@@ -242,15 +242,19 @@ int sysfsopen(int fd, const char * name) {
 }
 
 int sysclose(int fd) {
-    struct io * io = process_get_io(fd); // recovering io pointer
-    if (io == NULL)
+    // Validate fd first
+    if (fd < 0 || fd >= PROCESS_IOMAX)
         return -EBADFD;
 
-    // clear the slot 
-    current_process()->iotab[fd] = NULL;
-    
-    ioclose(io); // calling close from io abstraction
-    return 0; //success
+    struct process *proc = current_process();
+    struct io *io = proc->iotab[fd];  // look up fd in the process
+
+    if (io == NULL)
+        return -EBADFD;  // already closed or invalid
+
+    proc->iotab[fd] = NULL;   // clear the fd slot before calling ioclose
+    ioclose(io);              // now safely decrement and maybe close
+    return 0;
 }
 
 long sysread(int fd, void * buf, size_t bufsz) {

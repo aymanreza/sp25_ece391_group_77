@@ -175,6 +175,7 @@ void process_exit(void) {
         }
     }
 
+    fsflush();
     // discard the memory space
     // discard_active_mspace();
 
