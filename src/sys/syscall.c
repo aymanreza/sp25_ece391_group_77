@@ -179,6 +179,7 @@ int64_t syscall(const struct trap_frame * tfr) {
 
 
 int sysexit(void) {
+    fsflush();
     process_exit(); // Exits the currently running process
     return 0; 
 }
@@ -242,19 +243,15 @@ int sysfsopen(int fd, const char * name) {
 }
 
 int sysclose(int fd) {
-    // Validate fd first
-    if (fd < 0 || fd >= PROCESS_IOMAX)
+    struct io * io = process_get_io(fd); // recovering io pointer
+    if (io == NULL)
         return -EBADFD;
 
-    struct process *proc = current_process();
-    struct io *io = proc->iotab[fd];  // look up fd in the process
-
-    if (io == NULL)
-        return -EBADFD;  // already closed or invalid
-
-    proc->iotab[fd] = NULL;   // clear the fd slot before calling ioclose
-    ioclose(io);              // now safely decrement and maybe close
-    return 0;
+    // clear the slot 
+    current_process()->iotab[fd] = NULL;
+    
+    ioclose(io); // calling close from io abstraction
+    return 0; //success
 }
 
 long sysread(int fd, void * buf, size_t bufsz) {
@@ -271,6 +268,22 @@ long syswrite(int fd, const void * buf, size_t len) {
     if (io == NULL) return -EBADFD;
 
     if (validate_vmem(buf, len) < 0) return -EACCESS;
+
+    // Handle small writes (< block size) via writeat so they don't get rejected
+    int blksz = ioblksz(io);
+    if (len > 0 && len < (size_t)blksz) {
+        unsigned long long pos;
+        if (ioctl(io, IOCTL_GETPOS, &pos) < 0)
+            return -EIO;
+
+        long w = iowriteat(io, pos, buf, len);
+        if (w > 0) {
+            pos += w;
+            if (ioctl(io, IOCTL_SETPOS, &pos) < 0)
+                return -EIO;
+        }
+        return w;
+    }
 
     return io->intf->write(io, buf, len); //calling from io abstraction
 }

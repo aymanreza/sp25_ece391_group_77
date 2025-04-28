@@ -186,218 +186,6 @@ static int ktfs_update_root_size(uint32_t delta) {
     return ktfs_write_inode(fs.sb.root_directory_inode, &root_inode);
 }
 
-
-// Helper function to find a free data block in the bitmap
-static int find_free_data_block(void) {
-    // Calculate total data blocks from superblock
-    uint32_t total_data_blocks = fs.sb.block_count - 1 - fs.sb.bitmap_block_count - fs.sb.inode_block_count;
-    uint32_t bits_per_block = KTFS_BLKSZ * 8;
-    
-    // Start from bitmap block after inodes
-    uint32_t bitmap_start = 1; // Bitmap starts after superblock
-    
-    // Loop through bitmap blocks to find a free data block
-    for (uint32_t i = 0; i < fs.sb.bitmap_block_count; i++) {
-        void *bitmap_block;
-        int ret = cache_get_block(fs.cache, (bitmap_start + i) * KTFS_BLKSZ, &bitmap_block);
-        if (ret < 0) return ret;
-        
-        // Search for a free bit in this bitmap block
-        for (uint32_t bit = 0; bit < bits_per_block; bit++) {
-            uint32_t byte_idx = bit / 8;
-            uint32_t bit_idx = bit % 8;
-            uint8_t *bitmap_byte = (uint8_t*)bitmap_block + byte_idx;
-            
-            // Check if this bit is clear (block is free)
-            if (!(*bitmap_byte & (1 << bit_idx))) {
-                // Calculate the actual data block number
-                uint32_t block_num = i * bits_per_block + bit;
-                
-                // Make sure this is a valid data block number (not inode or bitmap)
-                if (block_num < total_data_blocks) {
-                    cache_release_block(fs.cache, bitmap_block, 0); // Don't modify bitmap yet
-                    return block_num;
-                }
-            }
-        }
-        
-        cache_release_block(fs.cache, bitmap_block, 0);
-    }
-    
-    return -ENODATABLKS;// No free blocks found
-    }
-
-// Helper function to mark a block as used in the bitmap
-static int mark_block_as_used(uint32_t block_num) {
-    uint32_t bits_per_block = KTFS_BLKSZ * 8;
-    uint32_t bitmap_block_idx = 1 + (block_num / bits_per_block); // +1 for superblock
-    uint32_t bit_offset = block_num % bits_per_block;
-    
-    void *bitmap_block;
-    int ret = cache_get_block(fs.cache, bitmap_block_idx * KTFS_BLKSZ, &bitmap_block);
-    if (ret < 0) return ret;
-    
-    // Set the bit corresponding to this block
-    uint32_t byte_idx = bit_offset / 8;
-    uint32_t bit_idx = bit_offset % 8;
-    uint8_t *bitmap_byte = (uint8_t*)bitmap_block + byte_idx;
-    *bitmap_byte |= (1 << bit_idx); // Set the bit
-    
-    cache_release_block(fs.cache, bitmap_block, 1); // Mark as dirty
-    return 0;
-}
-
-// Helper function to zero-initialize a block
-static int zero_initialize_block(uint32_t block_num) {
-    // Calculate actual block location
-    uint32_t block_location = 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + block_num;
-    
-    void *block_data;
-    int ret = cache_get_block(fs.cache, block_location * KTFS_BLKSZ, &block_data);
-    if (ret < 0) return ret;
-    
-    // Zero out the block
-    memset(block_data, 0, KTFS_BLKSZ);
-    
-    cache_release_block(fs.cache, block_data, 1); // Mark as dirty
-    return 0;
-}
-
-// Helper function to allocate an indirect block if needed
-static int allocate_indirect_block(struct ktfs_inode *inode) {
-    if (inode->indirect != 0) return 0; // Already allocated
-    
-    int free_block = find_free_data_block();
-    if (free_block < 0) return free_block; // Error or no space
-    
-    int ret = mark_block_as_used(free_block);
-    if (ret < 0) return ret;
-    
-    ret = zero_initialize_block(free_block);
-    if (ret < 0) return ret;
-    
-    inode->indirect = free_block;
-    return 0;
-}
-
-// Helper function to allocate a double-indirect block if needed
-static int allocate_dindirect_block(struct ktfs_inode *inode, int dindirect_idx) {
-    if (dindirect_idx >= KTFS_NUM_DINDIRECT_BLOCKS) return -EINVAL;
-    
-    if (inode->dindirect[dindirect_idx] != 0) return 0; // Already allocated
-    
-    int free_block = find_free_data_block();
-    if (free_block < 0) return free_block; // Error or no space
-    
-    int ret = mark_block_as_used(free_block);
-    if (ret < 0) return ret;
-    
-    ret = zero_initialize_block(free_block);
-    if (ret < 0) return ret;
-    
-    inode->dindirect[dindirect_idx] = free_block;
-    return 0;
-}
-
-// Helper function to assign a block to the file at a specific logical block index
-static int assign_block_to_file(struct ktfs_inode *inode, uint32_t logical_block_idx, uint32_t physical_block_num) {
-    const uint32_t ptrs_per_block = KTFS_BLKSZ / POINTER_BYTESIZE;
-    
-    // Case 1: Direct block
-    if (logical_block_idx < KTFS_NUM_DIRECT_DATA_BLOCKS) {
-        inode->block[logical_block_idx] = physical_block_num;
-        return 0;
-    }
-    
-    logical_block_idx -= KTFS_NUM_DIRECT_DATA_BLOCKS;
-    
-    // Case 2: Indirect block
-    if (logical_block_idx < ptrs_per_block) {
-        // Make sure we have an indirect block
-        int ret = allocate_indirect_block(inode);
-        if (ret < 0) return ret;
-        
-        // Update pointer in the indirect block
-        void *indirect_block;
-        uint32_t indirect_blk_loc = 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + inode->indirect;
-        ret = cache_get_block(fs.cache, indirect_blk_loc * KTFS_BLKSZ, &indirect_block);
-        if (ret < 0) return ret;
-        
-        // Update the pointer
-        uint32_t *pointers = (uint32_t*)indirect_block;
-        pointers[logical_block_idx] = physical_block_num;
-        
-        cache_release_block(fs.cache, indirect_block, 1); // Mark as dirty
-        return 0;
-    }
-    
-    logical_block_idx -= ptrs_per_block;
-    const uint32_t blocks_per_dindirect = ptrs_per_block * ptrs_per_block;
-    
-    // Case 3: Double-indirect block
-    for (int i = 0; i < KTFS_NUM_DINDIRECT_BLOCKS; i++) {
-        if (logical_block_idx < blocks_per_dindirect) {
-            // Make sure we have a double-indirect block
-            int ret = allocate_dindirect_block(inode, i);
-            if (ret < 0) return ret;
-            
-            // Calculate indices for both levels
-            uint32_t l1_index = logical_block_idx / ptrs_per_block;
-            uint32_t l2_index = logical_block_idx % ptrs_per_block;
-            
-            // Get the double-indirect block
-            uint32_t dindirect_blk_loc = 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + inode->dindirect[i];
-            void *dindirect_block;
-            ret = cache_get_block(fs.cache, dindirect_blk_loc * KTFS_BLKSZ, &dindirect_block);
-            if (ret < 0) return ret;
-            
-            uint32_t *l1_pointers = (uint32_t*)dindirect_block;
-            
-            // Check if we need to allocate the first-level indirect block
-            if (l1_pointers[l1_index] == 0) {
-                int free_block = find_free_data_block();
-                if (free_block < 0) {
-                    cache_release_block(fs.cache, dindirect_block, 0);
-                    return free_block;
-                }
-                
-                ret = mark_block_as_used(free_block);
-                if (ret < 0) {
-                    cache_release_block(fs.cache, dindirect_block, 0);
-                    return ret;
-                }
-                
-                ret = zero_initialize_block(free_block);
-                if (ret < 0) {
-                    cache_release_block(fs.cache, dindirect_block, 0);
-                    return ret;
-                }
-                
-                l1_pointers[l1_index] = free_block;
-                cache_release_block(fs.cache, dindirect_block, 1); // Mark as dirty
-            } else {
-                cache_release_block(fs.cache, dindirect_block, 0);
-            }
-            
-            // Now update the second-level block
-            uint32_t indirect_blk_loc = 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + l1_pointers[l1_index];
-            void *indirect_block;
-            ret = cache_get_block(fs.cache, indirect_blk_loc * KTFS_BLKSZ, &indirect_block);
-            if (ret < 0) return ret;
-            
-            uint32_t *l2_pointers = (uint32_t*)indirect_block;
-            l2_pointers[l2_index] = physical_block_num;
-            
-            cache_release_block(fs.cache, indirect_block, 1); // Mark as dirty
-            return 0;
-        }
-        
-        logical_block_idx -= blocks_per_dindirect;
-    }
-    
-    return -ENODATABLKS; // File too big - ran out of double-indirect blocks
-}
-
 // helper to clear a single bit (inode or data block) in the global bitmap
 static int ktfs_bitmap_clear_bit(uint32_t bit_idx) {
     uint32_t bits_per_blk = KTFS_BLKSZ * 8;
@@ -427,6 +215,57 @@ static int ktfs_shrink_root(uint32_t delta) {
     if (ret < 0) return ret;
     memcpy((char*)blkptr + offset, &root_inode, sizeof(root_inode));
     cache_release_block(fs.cache, blkptr, 1);
+    return 0;
+}
+
+// helper to allocate a free data block by scanning the bitmap
+static int ktfs_alloc_data_block(uint32_t *out_blockno) {
+    uint32_t bits = fs.sb.block_count;
+    for (uint32_t idx = 0; idx < bits; idx++) {
+        if (idx < 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count)
+            continue;
+        uint32_t dblk = idx;
+        uint32_t data_idx = dblk - (1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count);
+        uint32_t bit_idx = idx;
+        uint32_t bits_per_blk = KTFS_BLKSZ * 8;
+        uint32_t bm_blk = 1 + (bit_idx / bits_per_blk);
+        uint32_t off = bit_idx % bits_per_blk;
+        void *bp;
+        int ret = cache_get_block(fs.cache, bm_blk * KTFS_BLKSZ, &bp);
+        if (ret < 0) return ret;
+        uint8_t byte = ((uint8_t *)bp)[off/8];
+        if (!(byte & (1 << (off % 8)))) {
+            // mark it used
+            ((uint8_t *)bp)[off/8] |= (1 << (off % 8));
+            cache_release_block(fs.cache, bp, 1);
+            *out_blockno = data_idx;
+            return 0;
+        }
+        cache_release_block(fs.cache, bp, 0);
+    }
+    return -ENODATABLKS;
+}
+
+// helper to grow a file
+static int ktfs_set_end(struct ktfs_file *file, unsigned long long new_end) {
+    struct ktfs_inode inode;
+    int ret = ktfs_read_inode(file->inode_num, &inode);
+    if (ret < 0) return ret;
+    unsigned int old_size = inode.size;
+    unsigned int old_blocks = (old_size + KTFS_BLKSZ - 1) / KTFS_BLKSZ;
+    unsigned int new_blocks = (new_end + KTFS_BLKSZ - 1) / KTFS_BLKSZ;
+    // allocate new data blocks (direct only)
+    for (unsigned i = old_blocks; i < new_blocks; i++) {
+        if (i >= KTFS_NUM_DIRECT_DATA_BLOCKS) return -ENODATABLKS;
+        uint32_t blkno;
+        ret = ktfs_alloc_data_block(&blkno);
+        if (ret < 0) return ret;
+        inode.block[i] = blkno;
+    }
+    inode.size = new_end;
+    ret = ktfs_write_inode(file->inode_num, &inode);
+    if (ret < 0) return ret;
+    file->size = new_end;
     return 0;
 }
 
@@ -499,33 +338,21 @@ int get_blocknum_for_offset(struct ktfs_inode *inode, uint32_t file_block_index,
 int ktfs_mount(struct io * io) {
     // validating arguements
     if (!io) return -EINVAL;
-    // initilizing and aqcuring lock
+    // initilizing lock
     lock_init(&fs.fs_lock);
-    lock_acquire(&fs.fs_lock);
     // at reference and store into struct
     fs.bdev = ioaddref(io);
-    // allocating cache
-    if (fs.cache == NULL) {
-        int rc = create_cache(fs.bdev, &fs.cache);
-        if (rc < 0) {
-            lock_release(&fs.fs_lock); //releasing lock before return
-            return rc;
-        }
-    }
     // reading superblock into buffer
     static char buf[KTFS_BLKSZ];
     int ret = ioreadat(fs.bdev, 0, buf, KTFS_BLKSZ);
     if (ret != KTFS_BLKSZ) { //fail
-        lock_release(&fs.fs_lock);
         return -EIO;
     }
     // copying extracted superblock infor into out fs superblock struct
     memcpy(&fs.sb, buf, sizeof(struct ktfs_superblock));
     if (fs.sb.block_count == 0 || fs.sb.bitmap_block_count == 0 || fs.sb.inode_block_count == 0) {
-        lock_release(&fs.fs_lock); //validating superblock
         return -EINVAL;
     }
-    lock_release(&fs.fs_lock); //releasing lock
     return 0;
 }
 
@@ -542,6 +369,14 @@ int ktfs_open(const char * name, struct io ** ioptr) {
     // checking validity of arguments
     if (!name || !ioptr) return -EINVAL; //error, invalid aguments
 
+    // one-time cache setup once threads are running
+    static int once = 0;
+    if (!once) {
+        int rc = create_cache(fs.bdev, &fs.cache);
+        if (rc < 0)
+            return rc;
+        once = 1;
+    }
 
     lock_acquire(&fs.fs_lock);
     // read root inode
@@ -702,99 +537,32 @@ long ktfs_readat(struct io* io, unsigned long long pos, void * buf, long len) {
 int ktfs_cntl(struct io *io, int cmd, void *arg) {
     if (!io) return -EINVAL;
     lock_acquire(&fs.fs_lock);
+    struct ktfs_file *file = (void *)((char *)io - offsetof(struct ktfs_file, io));
+    int ret = 0;
 
-    struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io));
-
-    if (cmd == IOCTL_GETBLKSZ) {
-        lock_release(&fs.fs_lock);
-        return 1;  // block size is 1 byte
-    }
-    else if (cmd == IOCTL_GETEND) {
-        if (!arg) { lock_release(&fs.fs_lock); return -EINVAL; }
-        *(unsigned long long *)arg = file->size;
-        lock_release(&fs.fs_lock);
-        return 0;
-    }
-    else if (cmd == IOCTL_SETEND) {
-        if (!arg) { lock_release(&fs.fs_lock); return -EINVAL; }
-        unsigned long long new_end = *(unsigned long long *)arg;
-
-        struct ktfs_inode inode;
-        int ret = ktfs_read_inode(file->inode_num, &inode);
-        if (ret < 0) { lock_release(&fs.fs_lock); return ret; }
-
-        if (new_end < file->size) {
-            lock_release(&fs.fs_lock);
-            return -EINVAL;  // shrinking not supported
+    switch (cmd) {
+    case IOCTL_GETBLKSZ:
+        ret = 1;
+        break;
+    case IOCTL_GETEND:
+        if (!arg) ret = -EINVAL;
+        else *(unsigned long long *)arg = file->size;
+        break;
+    case IOCTL_SETEND:
+        if (!arg) {
+            ret = -EINVAL;
+        } else {
+            unsigned long long new_end = *(unsigned long long *)arg;
+            ret = ktfs_set_end(file, new_end);
         }
-        
-        if (new_end > file->size) {
-            // Calculate needed blocks
-            uint32_t current_blocks = (file->size == 0) ? 0 : ((file->size - 1) / KTFS_BLKSZ + 1);
-            uint32_t needed_blocks = (new_end == 0) ? 0 : ((new_end - 1) / KTFS_BLKSZ + 1);
-            
-            kprintf("Extending file: current_size=%u, new_size=%llu, current_blocks=%u, needed_blocks=%u\n", 
-                   file->size, new_end, current_blocks, needed_blocks);
-            
-            // Allocate the additional blocks
-            for (uint32_t i = current_blocks; i < needed_blocks; i++) {
-                // Find a free data block
-                int free_block = find_free_data_block();
-                if (free_block < 0) {
-                    kprintf("Failed to find free block: %d\n", free_block);
-                    lock_release(&fs.fs_lock);
-                    return free_block;
-                }
-                
-                kprintf("Found free block %d for logical block %u\n", free_block, i);
-                
-                // Mark block as used in bitmap
-                ret = mark_block_as_used(free_block);
-                if (ret < 0) {
-                    kprintf("Failed to mark block as used: %d\n", ret);
-                    lock_release(&fs.fs_lock);
-                    return ret;
-                }
-                
-                // Zero-initialize the new block
-                ret = zero_initialize_block(free_block);
-                if (ret < 0) {
-                    kprintf("Failed to zero-initialize block: %d\n", ret);
-                    lock_release(&fs.fs_lock);
-                    return ret;
-                }
-                
-                // Assign block to the file
-                ret = assign_block_to_file(&inode, i, free_block);
-                if (ret < 0) {
-                    kprintf("Failed to assign block to file: %d\n", ret);
-                    lock_release(&fs.fs_lock);
-                    return ret;
-                }
-            }
-        }
-
-        // Update inode size and write it back
-        inode.size = (uint32_t)new_end;
-        ret = ktfs_write_inode(file->inode_num, &inode);
-        if (ret < 0) { 
-            kprintf("Failed to write updated inode: %d\n", ret);
-            lock_release(&fs.fs_lock);
-            return ret;
-        }
-
-        // Update file handle size
-        file->size = new_end;
-        kprintf("File extended successfully to %llu bytes\n", new_end);
-        
-        lock_release(&fs.fs_lock);
-        return 0;
+        break;
+    default:
+        ret = -ENOTSUP;
     }
-    else {
-        lock_release(&fs.fs_lock);
-        return -ENOTSUP;
-    }
+    lock_release(&fs.fs_lock);
+    return ret;
 }
+
 // Inputs: None
 // Outputs: int - Returns 0 on success, or a negative failure
 // Description: it is flushes all the dirty block from the cache back to the backing devic to ensure
@@ -815,62 +583,44 @@ int ktfs_flush(void) {
     return ret;
 }
 
-
-long ktfs_writeat(struct io* io, unsigned long long pos, const void *buf, long len) {
+long ktfs_writeat(struct io *io, unsigned long long pos, const void *buf, long len) {
     if (!io || !buf || len < 0) return -EINVAL;
-
     lock_acquire(&fs.fs_lock);
-
-    struct ktfs_file *file = (struct ktfs_file *)((char *)io - offsetof(struct ktfs_file, io));
-    if (file->flags != KTFS_FILE_IN_USE) { lock_release(&fs.fs_lock); return -EINVAL; }
-
-    if (pos >= file->size) { 
+    struct ktfs_file *file = (void *)((char *)io - offsetof(struct ktfs_file, io));
+    if (file->flags != KTFS_FILE_IN_USE) {
         lock_release(&fs.fs_lock);
-        return 0;  // Trying to write past end of file, no effect
+        return -EINVAL;
     }
-
-    // Clip the write to the file size
-    if (pos + len > file->size) {
-        len = file->size - pos;
+    // grow file if writing past EOF
+    unsigned long long end_pos = pos + len;
+    if (end_pos > file->size) {
+        int e2 = ktfs_set_end(file, end_pos);
+        if (e2 < 0) { lock_release(&fs.fs_lock); return e2; }
     }
-
     struct ktfs_inode inode;
     int ret = ktfs_read_inode(file->inode_num, &inode);
     if (ret < 0) { lock_release(&fs.fs_lock); return ret; }
-
-    char blkbuf[KTFS_BLKSZ];
-    long total_written = 0;
-
-    while (total_written < len) {
-        uint64_t cur_pos = pos + total_written;
-        uint32_t block_idx = cur_pos / KTFS_BLKSZ;
-        uint32_t block_offset = cur_pos % KTFS_BLKSZ;
-        uint32_t bytes_left = len - total_written;
-        uint32_t to_copy = KTFS_BLKSZ - block_offset;
-        if (to_copy > bytes_left)
-            to_copy = bytes_left;
-
-        uint32_t phys_blockno;
-        ret = get_blocknum_for_offset(&inode, block_idx, &phys_blockno);
+    long total = 0;
+    while (total < len) {
+        uint64_t cur = pos + total;
+        uint32_t bidx = cur / KTFS_BLKSZ;
+        uint32_t boff = cur % KTFS_BLKSZ;
+        uint32_t left = len - total;
+        uint32_t to = KTFS_BLKSZ - boff;
+        if (to > left) to = left;
+        uint32_t phys;
+        ret = get_blocknum_for_offset(&inode, bidx, &phys);
         if (ret < 0) { lock_release(&fs.fs_lock); return ret; }
-
-        ret = ktfs_read_data_block(phys_blockno, blkbuf);
-        if (ret != KTFS_BLKSZ) { lock_release(&fs.fs_lock); return -EIO; }
-
-        memcpy(blkbuf + block_offset, (char *)buf + total_written, to_copy);
-
-        void *blkptr;
-        ret = cache_get_block(fs.cache, (1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + phys_blockno) * KTFS_BLKSZ, &blkptr);
+        void *blk;
+        uint64_t disk_off = (1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + phys) * KTFS_BLKSZ;
+        ret = cache_get_block(fs.cache, disk_off, &blk);
         if (ret < 0) { lock_release(&fs.fs_lock); return ret; }
-
-        memcpy(blkptr, blkbuf, KTFS_BLKSZ);
-        cache_release_block(fs.cache, blkptr, 1);
-
-        total_written += to_copy;
+        memcpy((char *)blk + boff, (char *)buf + total, to);
+        cache_release_block(fs.cache, blk, 1);
+        total += to;
     }
-
     lock_release(&fs.fs_lock);
-    return total_written;
+    return total;
 }
 
 int ktfs_create(const char* name) {
