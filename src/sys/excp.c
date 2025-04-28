@@ -56,6 +56,9 @@ void handle_smode_exception(unsigned int cause, struct trap_frame * tfr) {
     const char * name = NULL;
     char msgbuf[80];
 
+    kprintf("DEBUG: smode exception: cause=%u, sepc=%p, badva=%p\n",
+        cause, (void*)tfr->sepc, (void*)csrr_stval());
+
     if (0 <= cause && cause < sizeof(excp_names)/sizeof(excp_names[0]))
 		name = excp_names[cause];
 	
