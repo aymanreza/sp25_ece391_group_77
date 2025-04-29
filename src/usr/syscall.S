@@ -106,4 +106,18 @@ _fsdelete:
         ecall
         ret
 
+        .global _pipe
+        .type   _pipe, @function
+_pipe:
+        li      a7, SYSCALL_PIPE
+        ecall
+        ret
+
+        .global _iodup
+        .type   _iodup, @function
+_iodup:
+        li      a7, SYSCALL_IODUP
+        ecall
+        ret
+
         .end
