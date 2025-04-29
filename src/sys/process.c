@@ -154,7 +154,78 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
 }
 
 int process_fork(const struct trap_frame * tfr) {
-    return 0; 
+    //validating arguments
+    assert(tfr != NULL);
+
+    // create new process struct for the child
+    struct process *child_proc = kmalloc(sizeof(struct process));
+    if (!child_proc)
+        return -ENOMEM;
+
+    // copy parents I/O objects
+    struct process *parent = current_process();
+    for (int i = 0; i < PROCESS_IOMAX; i++) {
+        child_proc->iotab[i] = parent->iotab[i];
+        if (child_proc->iotab[i])
+            ioaddref(child_proc->iotab[i]);
+    }
+
+    //clone memory space for mtag process struct member
+    mtag_t child_mtag = clone_active_mspace();
+    if (!child_mtag)
+        return -ENOMEM;
+
+    // get idx for process struct member
+    int idx = -1;
+    for (int i = 0; i < NPROC; i++) {
+        if (proctab[i] == NULL) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        kfree(child_proc); //free child if no idx is found in process table
+        return -ECHILD;
+    }
+
+    // clone parent trap frame
+    struct trap_frame *child_tfr = kmalloc(sizeof(struct trap_frame));
+    if (!child_tfr) { //if no trap frame is created, close everything in the child process's io table
+        for (int i = 0; i < PROCESS_IOMAX; i++) {
+            if (child_proc->iotab[i])
+                ioclose(child_proc->iotab[i]);
+        }
+        kfree(child_proc); // then free the child_proc memory in heap
+        return -ENOMEM;
+    }
+    memcpy(child_tfr, tfr, sizeof(struct trap_frame)); // copying parent trapframe to child's
+    child_tfr->a0 = 0; // child sees return value 0
+
+    // sync with child using condition
+    struct condition done;
+    condition_init(&done, "fork.done");
+
+    // spawn child thread to run fork_func and get tid for process struct member
+    int tid = thread_spawn("child", (void*)fork_func, &done, child_tfr);
+    if (tid < 0) { // in the case that thread spawn failed
+        kfree(child_tfr); //free child trapframe
+        for (int i = 0; i < PROCESS_IOMAX; i++) { //close everything in I/O table
+            if (child_proc->iotab[i])
+                ioclose(child_proc->iotab[i]);
+        }
+        kfree(child_proc); //free the process
+        return tid; // error
+    }
+
+    // set up child process struct info
+    child_proc->tid = tid;
+    child_proc->mtag = child_mtag;
+    child_proc->idx = idx;
+    proctab[idx] = child_proc;
+    thread_set_process(tid, child_proc);
+
+    condition_wait(&done); // wait for child to take ownership of trap frame
+    return tid; // parent returns child's thread ID
 }
 
 void process_exit(void) {
@@ -245,14 +316,14 @@ int build_stack(void * stack, int argc, char ** argv) {
     return stksz;
 }
 
-// void fork_func(struct condition * done, struct trap_frame * tfr) {
-//     // switch to child’s memory space
-//     switch_mspace(current_process()->mtag);
+void fork_func(struct condition * done, struct trap_frame * tfr) {
+    // switch to child’s memory space
+    switch_mspace(current_process()->mtag);
 
-//     // Notify parent it can free trap frame
-//     condition_broadcast(done);
+    // Notify parent it can free trap frame
+    condition_broadcast(done);
 
-//     // enter U-mode
-//     trap_frame_jump(tfr, TP->stack_anchor - sizeof(struct trap_frame));
-//     return;
-// }
+    // enter U-mode
+    trap_frame_jump(tfr, get_scratch());
+    return;
+}

@@ -63,7 +63,7 @@ void main(void) {
 
     // insert testcase below
 
-    // Launch trek_cp2
+    // // Launch trek_cp2
     // struct io *trekio;
     // result = fsopen("trek_cp2", &trekio);
     // if (result < 0) panic("Failed to open trek_cp2");
@@ -84,9 +84,9 @@ void main(void) {
     // result = fsopen("rogue", &rogueio);
     // if (result < 0) panic("Failed to open rogue");
     // // char *rogue_argv[3];
-    // // rogue_argv[0] = (char *)"rogue";
-    // // rogue_argv[1] = (char *)"roguesave.dat";
-    // // rogue_argv[2] = NULL;
+    // // // rogue_argv[0] = (char *)"rogue";
+    // // // rogue_argv[1] = (char *)"roguesave.dat";
+    // // // rogue_argv[2] = NULL;
     // result = process_exec(rogueio, 0, NULL);
     // assert(result == 0);
     // thread_join(0);
