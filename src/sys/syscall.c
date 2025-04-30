@@ -258,7 +258,7 @@ long sysread(int fd, void * buf, size_t bufsz) {
     struct io * io = process_get_io(fd); // recovering io pointer
     if (io == NULL) return -EBADFD;
 
-        if (validate_vmem(buf, bufsz) < 0) return -EACCESS;
+    if (validate_vmem(buf, bufsz) < 0) return -EACCESS;
 
     return io->intf->read(io, buf, bufsz); //calling from io abstraction
 }

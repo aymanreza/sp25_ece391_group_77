@@ -680,3 +680,75 @@ static inline struct pte ptab_pte(const struct pte * pt, uint_fast8_t g_flag) {
 static inline struct pte null_pte(void) {
     return (struct pte) { };
 }
+
+int validate_vptr(const void *vp, size_t len, int rwxu_flags) {
+    uintptr_t start = (uintptr_t)vp;              // convert pointer to integer for arithmetic
+    if (!wellformed(start)) {                     // checking if wellformed
+        return EINVAL;
+    }
+    uintptr_t end = start + len;                  // computing end address
+    if (end < start) {                            // checking for wraparound/overflow
+        return EINVAL;
+    }
+
+    // align to page boundaries so we cover every page
+    uintptr_t page_start = ROUND_DOWN(start, PAGE_SIZE);
+    uintptr_t page_end   = ROUND_UP  (end,   PAGE_SIZE);
+
+    for (uintptr_t addr = page_start; addr < page_end; addr += PAGE_SIZE) {
+        // walk the three-level page table
+        struct pte *lvl2 = active_space_ptab();  // top-level page table base
+        if (!PTE_VALID(lvl2[VPN2(addr)])) {      // checking for valid level-2 entry
+            return EACCESS;
+        }
+
+        struct pte *lvl1 = (struct pte *)(lvl2[VPN2(addr)].ppn << PAGE_ORDER); // finding level-1 table
+        if (!PTE_VALID(lvl1[VPN1(addr)])) {      // checking for valid level-1 entry
+            return EACCESS;
+        }
+
+        struct pte *lvl0 = (struct pte *)(lvl1[VPN1(addr)].ppn << PAGE_ORDER); // finding level-0 table
+        struct pte p = lvl0[VPN0(addr)];         // fetching the leaf PTE
+        // checking for valid and all requested R/W/X/U bits
+        if (!PTE_VALID(p) || (p.flags & rwxu_flags) != rwxu_flags) {
+            return EACCESS;
+        }
+    }
+
+    return 0;
+}
+
+int validate_vstr(const char *vs, int ug_flags) {
+    uintptr_t addr = (uintptr_t)vs;               // converting to pointer for arithmetic
+    if (!wellformed(addr)) {                      // checking if wellformed
+        return EINVAL;
+    }
+
+    while (1) {
+        struct pte *lvl2 = active_space_ptab();  // top-level page table
+        if (!PTE_VALID(lvl2[VPN2(addr)]))        // checking for valid level-2 entry
+            return EACCESS;
+
+        struct pte *lvl1 = (struct pte *)(lvl2[VPN2(addr)].ppn << PAGE_ORDER); // finding level-1 table
+        if (!PTE_VALID(lvl1[VPN1(addr)]))
+            return EACCESS;
+
+        struct pte *lvl0 = (struct pte *)(lvl1[VPN1(addr)].ppn << PAGE_ORDER); // finding level-0 table
+        struct pte p = lvl0[VPN0(addr)];         // fetching the leaf PTE
+        // checking for valid and all requested R/W/X/U bits
+        if (!PTE_VALID(p) || (p.flags & ug_flags) != ug_flags)
+            return EACCESS;
+
+        char c = *(const char *)addr;
+        if (c == '\0')                           // stop at null terminator
+            break;
+
+        // moving to next character, checking for overflow
+        uintptr_t next = addr + 1;
+        if (next < addr)
+            return EINVAL;
+        addr = next;
+    }
+
+    return 0;
+}

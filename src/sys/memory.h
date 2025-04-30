@@ -81,4 +81,8 @@ extern unsigned long free_phys_page_count(void);
 extern int handle_umode_page_fault (
     struct trap_frame * tfr, uintptr_t vma);
 
+// added validate function declerations
+extern int validate_vptr(const void *vp, size_t len, int rwxu_flags);
+
+extern int validate_vstr(const char *vs, int ug_flags);
 #endif
