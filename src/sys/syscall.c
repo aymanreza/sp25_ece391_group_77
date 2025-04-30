@@ -170,6 +170,8 @@ int64_t syscall(const struct trap_frame * tfr) {
             return sysfscreate((const char*) tfr->a0);
         case(SYSCALL_FSDELETE):
             return sysfsdelete((const char*) tfr->a0);
+        case(SYSCALL_IODUP):
+            return sysiodup((int)tfr->a0, (int)tfr->a1);
         default:
             return -ENOTSUP;
 
@@ -310,5 +312,27 @@ int sysfsdelete(const char* name) {
         return -EACCESS;
 
     return fsdelete(name);  // calling delete from ktfs
+}
+
+int sysiodup(int oldfd, int newfd) {
+    struct process *proc = current_process(); //getting current process
+
+    // checking if fd is within bounds
+    if (oldfd < 0 || oldfd >= PROCESS_IOMAX || newfd < 0 || newfd >= PROCESS_IOMAX)
+        return -EINVAL;
+
+    // if the oldfd does not have associated i/o, return error
+    if (proc->iotab[oldfd] == NULL)
+        return -EBADFD;
+
+    // close target fd if already in use
+    if (proc->iotab[newfd] != NULL) {
+        ioclose(proc->iotab[newfd]);
+    }
+
+    // duplicate the descriptor
+    proc->iotab[newfd] = proc->iotab[oldfd];
+    ioaddref(proc->iotab[newfd]); // increment reference count
+    return newfd;
 }
 
