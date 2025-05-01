@@ -29,6 +29,7 @@
 #include "process.h"
 #include "ioimpl.h"
 #include "ktfs.h"
+#include "riscv.h"
 
 #define MAX_PRINT_LEN 512  
 #define NEXT_RISCV_INSTRUCTION 4 //each instruction is 4 bytes wide
@@ -36,39 +37,32 @@
 // EXPORTED FUNCTION DECLARATIONS
 //
 
-
 extern int ktfs_create(const char* name);
 extern int ktfs_delete(const char* name);
-
 extern void handle_syscall(struct trap_frame * tfr); // called from excp.c
 
 // INTERNAL FUNCTION DECLARATIONS
 //
 
 static int64_t syscall(const struct trap_frame * tfr);
-
 static int sysexit(void);
 static int sysexec(int fd, int argc, char ** argv);
 static int sysfork(const struct trap_frame * tfr);
 static int syswait(int tid);
 static int sysprint(const char * msg);
 static int sysusleep(unsigned long us);
-
 static int sysdevopen(int fd, const char * name, int instno);
 static int sysfsopen(int fd, const char * name);
-
 static int sysclose(int fd);
 static long sysread(int fd, void * buf, size_t bufsz);
 static long syswrite(int fd, const void * buf, size_t len);
 static int sysioctl(int fd, int cmd, void * arg);
 static int syspipe(int * wfdptr, int * rfdptr);
-
 static int sysfscreate(const char* name); 
 static int sysfsdelete(const char* name);
+
 // EXPORTED FUNCTION DEFINITIONS
 //
-
-
 
 void handle_syscall(struct trap_frame * tfr) {    
     int64_t result = syscall(tfr); // Initiates syscall present in trap frame struct
@@ -78,38 +72,6 @@ void handle_syscall(struct trap_frame * tfr) {
 
 // INTERNAL FUNCTION DEFINITIONS
 //
-
-
-int validate_vstr(const char *s, size_t maxlen) {
-    if (maxlen > MAX_PRINT_LEN)
-        maxlen = MAX_PRINT_LEN;
-
-    uintptr_t addr = (uintptr_t)s;
-
-    for (size_t i = 0; i < maxlen; i++) {
-        if (addr + i < UMEM_START_VMA || addr + i >= UMEM_END_VMA) //checking if its in user space
-            return -EACCESS;
-        if (*(const char *)(addr + i) == '\0')
-            return 0;  // valid null-terminated string
-    }
-
-    return -EACCESS;  // not null-terminated in maxlen
-}
-
-// Validate that everything lies entirely in user space
-int validate_vmem(const void *buf, size_t len) {
-    uintptr_t start = (uintptr_t)buf;
-    uintptr_t end = start + len;
-
-    // Prevent overflow
-    if (end < start)
-        return -EACCESS;
-
-    if (start < UMEM_START_VMA || end > UMEM_END_VMA)
-        return -EACCESS;
-
-    return 0;
-}
 
 // helper function for if fd=-1 and must be allocated to next available
 static int allocate_fd(int fd, struct io * io) {
@@ -134,8 +96,6 @@ static int allocate_fd(int fd, struct io * io) {
     proc->iotab[fd] = io;
     return fd;
 }
-
-
 
 int64_t syscall(const struct trap_frame * tfr) {
     kprintf("SYSCALL #%ld, a0=%p, a1=%p, a2=%p\n", tfr->a7, tfr->a0, tfr->a1, tfr->a2);
@@ -170,15 +130,11 @@ int64_t syscall(const struct trap_frame * tfr) {
             return sysfscreate((const char*) tfr->a0);
         case(SYSCALL_FSDELETE):
             return sysfsdelete((const char*) tfr->a0);
-        case(SYSCALL_IODUP):
-            return sysiodup((int)tfr->a0, (int)tfr->a1);
         default:
             return -ENOTSUP;
 
     }
 }
-
-
 
 int sysexit(void) {
     fsflush();
@@ -201,11 +157,10 @@ int syswait(int tid) {
 }
 
 int sysprint(const char * msg) {
-
     // validate_vstr returns 0 on success, or negative error (e.g., -EFAULT)
-    int rc = validate_vstr(msg, UMEM_SIZE); 
-    if (rc < 0)
-        return rc;
+    int rc = validate_vstr(msg, PTE_U | PTE_R);
+    if (rc)
+        return -rc;
 
     // Format: <thread_name:thread_num> msg
     kprintf("<%s:%d> %s\n", running_thread_name(), running_thread(), msg);
@@ -220,12 +175,12 @@ int sysusleep(unsigned long us) {
 }
 
 int sysdevopen(int fd, const char * name, int instno) {
-    if (validate_vstr(name, MAX_PRINT_LEN) < 0)
-        return -EACCESS;
+    int rc = validate_vstr(name, PTE_U | PTE_R);
+    if (rc)
+        return -rc;
 
     struct io *io = NULL;
-    int rc = open_device(name, instno, &io); // opening device
-
+    rc = open_device(name, instno, &io); // opening device
     if (rc < 0)
         return rc;
 
@@ -233,11 +188,12 @@ int sysdevopen(int fd, const char * name, int instno) {
 }
 
 int sysfsopen(int fd, const char * name) {
-    if (validate_vstr(name, MAX_PRINT_LEN) < 0)
-        return -EACCESS;
-
+    int rc = validate_vstr(name, PTE_U | PTE_R);
+    if (rc)
+        return -rc;
+    
     struct io *io;
-    int rc = fsopen(name, &io);
+    rc = fsopen(name, &io);
     if (rc < 0)
         return rc;
 
@@ -260,7 +216,9 @@ long sysread(int fd, void * buf, size_t bufsz) {
     struct io * io = process_get_io(fd); // recovering io pointer
     if (io == NULL) return -EBADFD;
 
-    if (validate_vmem(buf, bufsz) < 0) return -EACCESS;
+    int rc = validate_vptr(buf, bufsz, PTE_U | PTE_R);
+    if (rc)
+        return -rc;
 
     return io->intf->read(io, buf, bufsz); //calling from io abstraction
 }
@@ -269,7 +227,9 @@ long syswrite(int fd, const void * buf, size_t len) {
     struct io * io = process_get_io(fd); // recovering io pointer
     if (io == NULL) return -EBADFD;
 
-    if (validate_vmem(buf, len) < 0) return -EACCESS;
+    int rc = validate_vptr(buf, len, PTE_U | PTE_W);
+    if (rc)
+        return -rc;
 
     // Handle small writes (< block size) via writeat so they don't get rejected
     int blksz = ioblksz(io);
@@ -302,14 +262,17 @@ int syspipe(int * wfdptr, int * rfdptr) {
 }
 
 int sysfscreate(const char* name) {
-    if (validate_vstr(name, MAX_PRINT_LEN) < 0) return -EACCESS;//validating string
+    int rc = validate_vstr(name, PTE_U | PTE_R); //validating string
+    if (rc)
+        return -rc;
 
     return fscreate(name);  // calling create from ktfs
 }
 
 int sysfsdelete(const char* name) {
-    if (validate_vstr(name, MAX_PRINT_LEN) < 0) //validating string
-        return -EACCESS;
+    int rc = validate_vstr(name, PTE_U | PTE_R); //validating string
+    if (rc)
+        return -rc;
 
     return fsdelete(name);  // calling delete from ktfs
 }
@@ -335,4 +298,3 @@ int sysiodup(int oldfd, int newfd) {
     ioaddref(proc->iotab[newfd]); // increment reference count
     return newfd;
 }
-

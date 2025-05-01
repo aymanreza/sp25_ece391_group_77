@@ -105,9 +105,7 @@ struct pte {
 #define VPN2(vma) ((VPN(vma) >> (2*9)) % PTE_CNT)
 #define VPN1(vma) ((VPN(vma) >> (1*9)) % PTE_CNT)
 #define VPN0(vma) ((VPN(vma) >> (0*9)) % PTE_CNT)
-
 #define MIN(a,b) (((a)<(b))?(a):(b))
-
 #define ROUND_UP(n,k) (((n)+(k)-1)/(k)*(k)) 
 #define ROUND_DOWN(n,k) ((n)/(k)*(k))
 
@@ -117,23 +115,19 @@ struct pte {
 #define PTE_VALID(pte) (((pte).flags & PTE_V) != 0)
 #define PTE_GLOBAL(pte) (((pte).flags & PTE_G) != 0)
 #define PTE_LEAF(pte) (((pte).flags & (PTE_R | PTE_W | PTE_X)) != 0)
-
 #define PT_INDEX(lvl, vpn) (((vpn) & (0x1FF << (lvl * (PAGE_ORDER - PTE_ORDER)))) \
                              >> (lvl * (PAGE_ORDER - PTE_ORDER)))
+
 // INTERNAL FUNCTION DECLARATIONS
 //
-
-
 
 static inline mtag_t active_space_mtag(void);
 static inline mtag_t ptab_to_mtag(struct pte * root, unsigned int asid);
 static inline struct pte * mtag_to_ptab(mtag_t mtag);
 static inline struct pte * active_space_ptab(void);
-
 static inline void * pageptr(uintptr_t n);
 static inline uintptr_t pagenum(const void * p);
 static inline int wellformed(uintptr_t vma);
-
 static inline struct pte leaf_pte(const void * pp, uint_fast8_t rwxug_flags);
 static inline struct pte ptab_pte(const struct pte * pt, uint_fast8_t g_flag);
 static inline struct pte null_pte(void);
@@ -156,6 +150,46 @@ static struct page_chunk * free_chunk_list;
 
 // EXPORTED FUNCTION DECLARATIONS
 // 
+
+// helper function to clone a page table based on a given lvl
+static struct pte *clone_ptab(struct pte *old_ptab, int lvl)
+{
+    // allocate a new page for this level's page table
+    void *new_page = alloc_phys_page();
+    if (!new_page) {
+        panic("clone_ptab: out of pages");
+    }
+    struct pte *new_ptab = (struct pte *)new_page;
+    memset(new_ptab, 0, PAGE_SIZE);
+
+    for (unsigned i = 0; i < PTE_CNT; i++) {
+        struct pte p = old_ptab[i];
+        if (!PTE_VALID(p))
+            continue;
+
+        // copying global flag so we preserve shared mappings
+        uint8_t g_flag = p.flags & PTE_G;
+
+        if (!PTE_LEAF(p)) {
+            // non-leaf, so recurse into next level
+            struct pte *child_old = (struct pte *)(p.ppn << PAGE_ORDER);
+            struct pte *child_new = clone_ptab(child_old, lvl - 1);
+            new_ptab[i] = ptab_pte(child_new, g_flag);
+        } else {
+            // leaf, so allocate a new data page and copy its contents
+            void *old_page = (void *)(p.ppn << PAGE_ORDER);
+            void *dup_page = alloc_phys_page();
+            if (!dup_page) {
+                panic("clone_ptab: out of pages");
+            }
+            memcpy(dup_page, old_page, PAGE_SIZE);
+            // making a new leaf PTE with the same flags
+            new_ptab[i] = leaf_pte(dup_page, p.flags & (PTE_R|PTE_W|PTE_X|PTE_U) | g_flag);
+        }
+    }
+
+    return new_ptab;
+}
 
 void memory_init(void) {
     const void * const text_start = _kimg_text_start;
@@ -288,7 +322,22 @@ mtag_t switch_mspace(mtag_t mtag) {
 mtag_t clone_active_mspace(void) {
     // mtag_t TODO; 
     // TODO = 0; 
-    return main_mtag; // for cp2 single memory space, simply return the current active memory space
+    // saving pointer to the level 2 active page table
+    struct pte *old_root = active_space_ptab();
+
+    // cloning all 3 levels
+    struct pte *new_root = clone_ptab(old_root, ROOT_LEVEL);
+
+    // allocating a unique ASID
+    static unsigned next_asid = 1;
+    unsigned max_asid = 1u << RISCV_SATP_ASID_nbits;
+    unsigned asid = next_asid;
+    next_asid = (next_asid + 1) % max_asid;
+    if (next_asid == 0)
+        next_asid = 1;
+
+    // creating and returning the SATP tag for the cloned space
+    return ptab_to_mtag(new_root, asid);
 }
 
 void reset_active_mspace(void) {
@@ -335,9 +384,17 @@ void reset_active_mspace(void) {
 mtag_t discard_active_mspace(void) {
     // mtag_t TODO; 
     // TODO = 0;
-    // // resetting and returning the current active memory space
-    // reset_active_mspace();
-    return main_mtag; 
+    // saving current tag
+    mtag_t old_tag = csrr_satp();
+
+    // unmapping & freeing every non-global page in current mspace
+    reset_active_mspace();
+
+    // switching back to the main kernel/initial page table
+    csrw_satp(main_mtag);
+    sfence_vma();    
+
+    return main_mtag;
 }
 
 // The map_page() function maps a single page into the active address space at
