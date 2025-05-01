@@ -568,7 +568,20 @@ static long pipe_read(struct io *io, void *buf, long len) {
     }
 
     lock_release(&p->lock);
-    return (count > 0) ? count : (p->writer_open ? 0 : -1);
+    if (count > 0) 
+    {
+        return count;
+    } 
+    else 
+    {
+        if (p->writer_open) 
+        {
+            return 0;
+        } else 
+        {
+            return -1;
+        }
+    }
 }
 
 static long pipe_write(struct io *io, const void *buf, long len) {

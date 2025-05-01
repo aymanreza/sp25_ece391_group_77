@@ -394,7 +394,7 @@ long ioterm_write(struct io * io, const void * buf, long len) {
 
     if (rp != wp) {
         cnt = iowrite(iot->rawio, wp, rp - wp);
-
+        Agrawal
         if (cnt < 0)
             return cnt;
         else if (cnt == 0)
