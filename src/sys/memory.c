@@ -167,24 +167,34 @@ static struct pte *clone_ptab(struct pte *old_ptab, int lvl)
         if (!PTE_VALID(p))
             continue;
 
-        // copying global flag so we preserve shared mappings
-        uint8_t g_flag = p.flags & PTE_G;
+        // if global, copy directly
+        if (p.flags & PTE_G) {
+            new_ptab[i] = p;
+            continue;
+        }
 
         if (!PTE_LEAF(p)) {
             // non-leaf, so recurse into next level
             struct pte *child_old = (struct pte *)(p.ppn << PAGE_ORDER);
             struct pte *child_new = clone_ptab(child_old, lvl - 1);
-            new_ptab[i] = ptab_pte(child_new, g_flag);
-        } else {
+            new_ptab[i] = ptab_pte(child_new, p.flags & PTE_G); // build a new entry pointer
+        } 
+        else {
             // leaf, so allocate a new data page and copy its contents
-            void *old_page = (void *)(p.ppn << PAGE_ORDER);
-            void *dup_page = alloc_phys_page();
-            if (!dup_page) {
-                panic("clone_ptab: out of pages");
+            if (lvl > 0) {
+                // larger page, share the entire mapping
+                new_ptab[i] = p;
+            } 
+            else {
+                // small page, duplicate the data
+                void *old_data = (void *)(p.ppn << PAGE_ORDER);
+                void *dup_data = alloc_phys_page();
+                if (!dup_data)
+                    panic("clone_ptab: out of pages");
+                memcpy(dup_data, old_data, PAGE_SIZE);
+                // making a new leaf PTE with the same flags
+                new_ptab[i] = leaf_pte(dup_data, p.flags & (PTE_R|PTE_W|PTE_X|PTE_U));
             }
-            memcpy(dup_page, old_page, PAGE_SIZE);
-            // making a new leaf PTE with the same flags
-            new_ptab[i] = leaf_pte(dup_page, p.flags & (PTE_R|PTE_W|PTE_X|PTE_U) | g_flag);
         }
     }
 
@@ -341,58 +351,56 @@ mtag_t clone_active_mspace(void) {
 }
 
 void reset_active_mspace(void) {
-    // iterating over all pages in the user memory
-    for (uintptr_t address = UMEM_START_VMA; address < UMEM_END_VMA; address += PAGE_SIZE) {
-        // getting pointer to level 2 page table
-        struct pte *lvl2 = active_space_ptab();
-        // using macro to compute index into level 2 page table
-        unsigned int lvl2_idx = VPN2(address);
-        if (!PTE_VALID(lvl2[lvl2_idx])) continue;
+    struct pte *lvl2 = active_space_ptab(); // get root page table
 
-        // finding address of level 1 page table by left shifting by PAGE_ORDER
-        struct pte *lvl1 = (struct pte *)((uintptr_t)lvl2[lvl2_idx].ppn << PAGE_ORDER);
-        // using macro to compute level 1 index
-        unsigned int lvl1_idx = VPN1(address);
-        if (!PTE_VALID(lvl1[lvl1_idx])) continue;
+    // checking level 2 entries
+    for (unsigned i2 = 0; i2 < PTE_CNT; i2++) {
+        struct pte e2 = lvl2[i2]; // loading lvl2 entry
+        if (!PTE_VALID(e2) || (e2.flags & PTE_G)) // skipping invalid or global
+            continue;
 
-        // finding address of level 0 page table by left shifting by PAGE_ORDER
-        struct pte *lvl0 = (struct pte *)((uintptr_t)lvl1[lvl1_idx].ppn << PAGE_ORDER);
-        // using macro to compute level 0 index
-        unsigned int lvl0_idx = VPN0(address);
-        if (!PTE_VALID(lvl0[lvl0_idx])) continue;
+        struct pte *lvl1 = (void *)(e2.ppn << PAGE_ORDER); // finding lvl1 table
+        // checking level 1 entries
+        for (unsigned i1 = 0; i1 < PTE_CNT; i1++) {
+            struct pte e1 = lvl1[i1]; // loading lvl1 entry
+            if (!PTE_VALID(e1) || (e1.flags & PTE_G)) // skipping invalid or global
+                continue;
 
-        // checking that lvl0 entry is valid
-        if (PTE_VALID(lvl0[lvl0_idx])) {
-            // getting current physical page number
-            uintptr_t ppn = lvl0[lvl0_idx].ppn;
-            kprintf("lvl0[lvl0_idx].ppn\n");
-
-            // converting page number to a pointer to the physical address of the page
-            void *phys_page_addr = (void *)((uintptr_t)ppn << PAGE_ORDER);
-
-            // freeing the physical page
-            free_phys_page(phys_page_addr);
-
-            // clearing the PTE
-            lvl0[lvl0_idx] = null_pte();
-        }   
+            struct pte *lvl0 = (void *)(e1.ppn << PAGE_ORDER); // finding lvl0 table
+            // checking level 0 entries
+            for (unsigned i0 = 0; i0 < PTE_CNT; i0++) {
+                struct pte leaf = lvl0[i0]; // loading leaf PTE
+                if (!PTE_VALID(leaf) || (leaf.flags & PTE_G)) // skipping invalid or global
+                    continue;
+                free_phys_page((void *)(leaf.ppn << PAGE_ORDER)); // freeing data page
+                lvl0[i0] = null_pte(); // clearing leaf
+            }
+            lvl1[i1] = null_pte(); // clearing lvl1 entry
+            free_phys_page(lvl0); // freeing lvl0 table page
+        }
+        lvl2[i2] = null_pte(); // clearing lvl2 entry
+        free_phys_page(lvl1); // freeing lvl1 table page
     }
-    // flushing the TLB to ensure unmapped pages aren't in cache
-    sfence_vma(); 
+
+    sfence_vma(); // flushing the TLB to ensure unmapped pages aren't in cache
 }
 
 mtag_t discard_active_mspace(void) {
     // mtag_t TODO; 
     // TODO = 0;
-    // saving current tag
+    // saving current tag and page table root
     mtag_t old_tag = csrr_satp();
+    struct pte *old_root = active_space_ptab();
 
     // unmapping & freeing every non-global page in current mspace
     reset_active_mspace();
 
     // switching back to the main kernel/initial page table
     csrw_satp(main_mtag);
-    sfence_vma();    
+    sfence_vma();
+    
+    // freeing old root page table
+    free_phys_page(old_root);
 
     return main_mtag;
 }
@@ -487,7 +495,8 @@ void * alloc_and_map_range(uintptr_t vma, size_t size, int rwxug_flags) {
     void* phys_address_pointer = alloc_phys_pages(page_count);
     if (!phys_address_pointer) panic("Failed to alloc physical pages!");
 
-    // kprintf("Allocated %u page(s) at physical %p for vaddr 0x%lx\n", page_count, phys_address_pointer, vma);
+    // clear the pages in range
+    memset(phys_address_pointer, 0, page_count * PAGE_SIZE);
 
     // mapping pages using returned physical address pointer
     map_range(vma, size, phys_address_pointer, rwxug_flags);
@@ -667,7 +676,6 @@ int handle_umode_page_fault(struct trap_frame * tfr, uintptr_t vma) {
 
     int flags = PTE_R | PTE_U;
 
-
     if (cause == RISCV_SCAUSE_STORE_PAGE_FAULT) {
         flags |= PTE_W;
     }
@@ -678,6 +686,9 @@ int handle_umode_page_fault(struct trap_frame * tfr, uintptr_t vma) {
     // allocating a new physical page
     void *new_page = alloc_phys_page();
     assert(new_page != NULL);
+
+    // clearing page before mapping
+    memset(new_page, 0, PAGE_SIZE);
 
     // mapping the new page with given vma and user-mode flags
     map_page(vma, new_page, flags);
