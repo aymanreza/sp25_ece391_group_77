@@ -34,6 +34,22 @@ struct seekio {
     int blksz; // Block size of backing endpoint
 };
 
+struct pipe {
+    char *buffer;
+    size_t head;
+    size_t tail;
+    int reader_open;
+    int writer_open;
+    struct condition read_cond;
+    struct condition write_cond;
+    struct lock lock;
+};
+
+struct pipeio {
+    struct io io;
+    struct pipe *pipe;
+};
+
 // INTERNAL FUNCTION DEFINITIONS
 //
 
@@ -59,6 +75,10 @@ static long seekio_readat (
 static long seekio_writeat (
     struct io * io, unsigned long long pos, const void * buf, long len);
 
+static long pipe_read(struct io *io, void *buf, long len);
+static long pipe_write(struct io *io, const void *buf, long len);
+static void pipe_close(struct io *io);
+
 
 // INTERNAL GLOBAL CONSTANTS
 static const struct iointf seekio_iointf = {
@@ -75,6 +95,16 @@ static const struct iointf memio_iointf = {
     .cntl = &memio_cntl,
     .readat = &memio_readat,
     .writeat = &memio_writeat
+};
+
+static const struct iointf pipe_reader_iointf = {
+    .close = &pipe_close,
+    .read = &pipe_read
+};
+
+static const struct iointf pipe_writer_iointf = {
+    .close = &pipe_close,
+    .write = &pipe_write
 };
 
 // EXPORTED FUNCTION DEFINITIONS
@@ -493,3 +523,103 @@ long seekio_writeat (
     struct seekio * const sio = (void*)io - offsetof(struct seekio, io);
     return iowriteat(sio->bkgio, pos, buf, len);
 }
+
+void create_pipe(struct io **wioptr, struct io **rioptr) {
+    struct pipe *p = kcalloc(1, sizeof(struct pipe));
+    p->buffer = alloc_phys_page();
+    p->reader_open = 1;
+    p->writer_open = 1;
+    lock_init(&p->lock);
+    condition_init(&p->read_cond, "pipe_read_cond");
+    condition_init(&p->write_cond, "pipe_write_cond");
+
+    // Allocate pipe I/O objects
+    struct pipeio *pr = kcalloc(1, sizeof(struct pipeio));
+    struct pipeio *pw = kcalloc(1, sizeof(struct pipeio));
+
+    pr->pipe = p;
+    pw->pipe = p;
+
+    ioinit1(&pr->io, &pipe_reader_iointf);
+    ioinit1(&pw->io, &pipe_writer_iointf);
+
+    *rioptr = &pr->io;
+    *wioptr = &pw->io;
+}
+
+static long pipe_read(struct io *io, void *buf, long len) {
+    struct pipeio *pio = (void *)io;
+    struct pipe *p = pio->pipe;
+    char *dst = buf;
+    int count = 0;
+
+    lock_acquire(&p->lock);
+
+    while (count < len) {
+        while (p->head == p->tail && p->writer_open) {
+            condition_wait(&p->read_cond);
+        }
+
+        if (p->head == p->tail && !p->writer_open)
+            break;
+
+        dst[count++] = p->buffer[p->head++ % PAGE_SIZE];
+        condition_broadcast(&p->write_cond);
+    }
+
+    lock_release(&p->lock);
+    return (count > 0) ? count : (p->writer_open ? 0 : -1);
+}
+
+static long pipe_write(struct io *io, const void *buf, long len) {
+    struct pipeio *pio = (void *)io;
+    struct pipe *p = pio->pipe;
+    const char *src = buf;
+    int count = 0;
+
+    lock_acquire(&p->lock);
+
+    while (count < len) {
+        while (((p->tail + 1) % PAGE_SIZE) == (p->head % PAGE_SIZE) && p->reader_open) {
+            condition_wait(&p->write_cond);
+        }
+
+        if (!p->reader_open)
+            break;
+
+        p->buffer[p->tail++ % PAGE_SIZE] = src[count++];
+        condition_broadcast(&p->read_cond);
+    }
+
+    lock_release(&p->lock);
+    return (count > 0) ? count : (p->reader_open ? 0 : -1);
+}
+
+static void pipe_close(struct io *io) {
+    struct pipeio *pio = (void *)io;
+    struct pipe *p = pio->pipe;
+    int free_now = 0;
+
+    lock_acquire(&p->lock);
+
+    if (io->intf == &pipe_reader_iointf)
+        p->reader_open = 0;
+    else if (io->intf == &pipe_writer_iointf)
+        p->writer_open = 0;
+
+    if (!p->reader_open && !p->writer_open)
+        free_now = 1;
+
+    condition_broadcast(&p->read_cond);
+    condition_broadcast(&p->write_cond);
+
+    lock_release(&p->lock);
+
+    if (free_now) {
+        free_phys_page(p->buffer);
+        kfree(p);
+    }
+
+    kfree(pio);  // free enclosing pipeio struct
+}
+

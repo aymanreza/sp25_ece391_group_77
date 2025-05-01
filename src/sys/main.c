@@ -71,13 +71,13 @@ void main(void) {
     // assert(result == 0);
     // thread_join(0);
 
-    // Launch zork 
-    struct io *zorkio;
-    result = fsopen("zork", &zorkio);
-    if (result < 0) panic("Failed to open zork");
-    result = process_exec(zorkio, 0, NULL); 
-    assert(result == 0);
-    thread_join(0);
+    // // Launch zork 
+    // struct io *zorkio;
+    // result = fsopen("zork", &zorkio);
+    // if (result < 0) panic("Failed to open zork");
+    // result = process_exec(zorkio, 0, NULL); 
+    // assert(result == 0);
+    // thread_join(0);
 
     // Launch rogue with filename "roguesave.dat" as argv[1]
     // struct io *rogueio;
@@ -90,5 +90,12 @@ void main(void) {
     // result = process_exec(rogueio, 0, NULL);
     // assert(result == 0);
     // thread_join(0);
+
+    struct io *shellio;
+    result = fsopen("shell.elf", &shellio);
+    if (result < 0) panic("Failed to open shell");
+    result = process_exec(shellio, 0, NULL);
+    assert(result == 0);
+    thread_join(0);
     
 }

@@ -26,6 +26,7 @@ struct io; // opaque (defined in ioimpl.h)
 extern unsigned long iorefcnt(const struct io * io);
 extern struct io * ioaddref(struct io * io);
 extern void ioclose(struct io * io);
+extern void create_pipe(struct io **wioptr, struct io **rioptr);
 
 extern int ioctl (
     struct io * io,

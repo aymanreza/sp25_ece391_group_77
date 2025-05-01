@@ -43,6 +43,8 @@
 
 static int build_stack(void * stack, int argc, char ** argv);
 
+static void fork_func(struct condition * done, struct trap_frame * tfr);
+
 
 // static void fork_func(struct condition * forked, struct trap_frame * tfr);
 

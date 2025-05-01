@@ -105,7 +105,7 @@ int64_t syscall(const struct trap_frame * tfr) {
         case(SYSCALL_EXEC):
             return sysexec((int)tfr->a0, (int)tfr->a1, (char **)tfr->a2);
         case(SYSCALL_FORK):
-            return sysfork((const struct trap_frame *)tfr->a0);
+            return sysfork(tfr->a0);
         case(SYSCALL_WAIT):
             return syswait((int)tfr->a0);
         case(SYSCALL_PRINT):
@@ -257,10 +257,6 @@ int sysioctl(int fd, int cmd, void * arg) {
     return io->intf->cntl(io, cmd, arg); //calling from io abstraction
 }
 
-int syspipe(int * wfdptr, int * rfdptr) {
-    return 0;
-}
-
 int sysfscreate(const char* name) {
     int rc = validate_vstr(name, PTE_U | PTE_R); //validating string
     if (rc)
@@ -297,4 +293,32 @@ int sysiodup(int oldfd, int newfd) {
     proc->iotab[newfd] = proc->iotab[oldfd];
     ioaddref(proc->iotab[newfd]); // increment reference count
     return newfd;
+}
+
+int syspipe(int *wfdptr, int *rfdptr) {
+    struct io *wio, *rio;
+    int wfd, rfd;
+
+    if (wfdptr == NULL || rfdptr == NULL)
+        return -EINVAL;
+
+    create_pipe(&wio, &rio);
+
+    struct process *proc = current_process();
+    for (wfd = 0; wfd < PROCESS_IOMAX && proc->iotab[wfd]; wfd++);
+    for (rfd = 0; rfd < PROCESS_IOMAX && (proc->iotab[rfd] || rfd == wfd); rfd++);
+
+    if (wfd >= PROCESS_IOMAX || rfd >= PROCESS_IOMAX) {
+        ioclose(wio);
+        ioclose(rio);
+        return -EMFILE;
+    }
+
+    proc->iotab[wfd] = wio;
+    proc->iotab[rfd] = rio;
+
+    *wfdptr = wfd;
+    *rfdptr = rfd;
+
+    return 0;
 }
