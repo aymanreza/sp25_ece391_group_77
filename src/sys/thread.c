@@ -524,6 +524,11 @@ void init_idle_thread(void) {
 
 static void set_running_thread(struct thread * thr) {
     asm inline ("mv tp, %0" :: "r"(thr) : "tp");
+
+    //added this
+    if (thr->proc != NULL) {
+        switch_mspace(thr->proc->mtag);
+    }
 }
 
 
@@ -596,8 +601,10 @@ struct thread * create_thread(const char * name) {
 
     thr = kcalloc(1, sizeof(struct thread));
    
-    stack_page = kmalloc(STACK_SIZE);
-    anchor = stack_page + STACK_SIZE;
+    stack_page = alloc_phys_page();  // allocate one physical page // stack_page = kmalloc(STACK_SIZE);
+    if (!stack_page) return NULL;
+    anchor = stack_page + PAGE_SIZE; // used to be STACK_SIZE
+
     anchor -= 1; // anchor is at base of stack
     thr->stack_lowest = stack_page;
     thr->stack_anchor = anchor;
@@ -654,7 +661,8 @@ void running_thread_suspend(void) {
 
         enable_interrupts(); // this will enable the interrupt
         _thread_swtch(next_thread); // this will do the context switch
-        kfree(TP->stack_lowest);
+
+        free_phys_page(TP->stack_lowest); // used to be kfree(TP->stack_lowest);
     }
     restore_interrupts(pie); // this will enable the interrupt
 
