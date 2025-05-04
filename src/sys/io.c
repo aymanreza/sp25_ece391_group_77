@@ -524,6 +524,12 @@ long seekio_writeat (
     return iowriteat(sio->bkgio, pos, buf, len);
 }
 
+
+// void create_pipe(struct io ** wioptr, struct io ** rioptr)
+// Inputs: Double pointers to pipe writer and reader IO structures
+// Outputs: Allocated reader and writer I/O endpoints
+// Description: Creates a uni-directional pipe with a shared circular buffer and synchronization primitives.
+// Side Effects: Allocates memory and condition variables, sets up locking and refcounting
 void create_pipe(struct io **wioptr, struct io **rioptr) {
     struct pipe *p = kcalloc(1, sizeof(struct pipe));
     p->buffer = alloc_phys_page();
@@ -547,6 +553,11 @@ void create_pipe(struct io **wioptr, struct io **rioptr) {
     *wioptr = &pw->io;
 }
 
+// static long pipe_read(struct io * io, void * buf, long len)
+// Inputs: Pipe reader endpoint, destination buffer, length to read
+// Outputs: Number of bytes read, or -1 on EOF/error
+// Description: Reads from pipe buffer, blocking if empty unless writer has closed
+// Side Effects: Waits on condition variables, modifies pipe head, wakes writers
 static long pipe_read(struct io *io, void *buf, long len) {
     struct pipeio *pio = (void *)io;
     struct pipe *p = pio->pipe;
@@ -584,6 +595,11 @@ static long pipe_read(struct io *io, void *buf, long len) {
     }
 }
 
+// static long pipe_write(struct io * io, const void * buf, long len)
+// Inputs: Pipe writer endpoint, source buffer, length to write
+// Outputs: Number of bytes written, or -1 if reader is closed
+// Description: Writes to pipe buffer, blocking if full unless reader has closed
+// Side Effects: Waits on condition variables, modifies pipe tail, wakes readers
 static long pipe_write(struct io *io, const void *buf, long len) {
     struct pipeio *pio = (void *)io;
     struct pipe *p = pio->pipe;
@@ -608,6 +624,11 @@ static long pipe_write(struct io *io, const void *buf, long len) {
     return (count > 0) ? count : (p->reader_open ? 0 : -1);
 }
 
+// static void pipe_close(struct io * io)
+// Inputs: Pipe endpoint (reader or writer)
+// Outputs: None
+// Description: Marks one endpoint as closed; deallocates pipe if both ends are closed
+// Side Effects: Broadcasts to waiting threads, frees memory if both ends closed
 static void pipe_close(struct io *io) {
     struct pipeio *pio = (void *)io;
     struct pipe *p = pio->pipe;

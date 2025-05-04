@@ -100,6 +100,32 @@ struct elf64_phdr {
 
 #define  EM_RISCV   243
 
+// int elf_load(struct io * elfio, void (**eptr)(void))
+// Inputs:
+// - elfio: pointer to an I/O stream representing the ELF file (must support readat)
+// - eptr: output parameter to store the entry point of the loaded executable
+//
+// Output:
+// - Returns 0 on success
+// - Returns negative error codes on failure:
+// - -EIO if reading fails
+// - -EBADFMT if ELF magic is invalid
+// - -EINVAL for unsupported format or invalid memory ranges
+//
+// Description:
+// Loads a 64-bit RISC-V ELF executable from the given I/O stream into memory.
+// For each PT_LOAD segment, it:
+// - Validates the memory range
+// - Allocates pages
+// - Reads the segment contents from the file
+// - Zeros the remaining bytes in memory
+// - Sets proper page permissions (PTE_R, PTE_W, PTE_X)
+// The entry point address is written to *eptr.
+//
+// Side Effects:
+// - Allocates virtual memory and sets page permissions
+// - Writes segment data into user memory
+// - Sets the user-mode entry point function pointer
 int elf_load(struct io * elfio, void (**eptr)(void)) {
     struct elf64_ehdr ehdr;
 
