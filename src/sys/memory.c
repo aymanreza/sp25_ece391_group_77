@@ -175,7 +175,7 @@ static struct pte *clone_ptab(struct pte *old_ptab, int lvl)
 
         if (!PTE_LEAF(p)) {
             // non-leaf, so recurse into next level
-            struct pte *child_old = (struct pte *)(p.ppn << PAGE_ORDER);
+            struct pte *child_old = (struct pte *)(uintptr_t)(p.ppn << PAGE_ORDER);
             struct pte *child_new = clone_ptab(child_old, lvl - 1);
             new_ptab[i] = ptab_pte(child_new, p.flags & PTE_G); // build a new entry pointer
         } 
@@ -187,7 +187,7 @@ static struct pte *clone_ptab(struct pte *old_ptab, int lvl)
             } 
             else {
                 // small page, duplicate the data
-                void *old_data = (void *)(p.ppn << PAGE_ORDER);
+                void *old_data = (void *)(uintptr_t)(p.ppn << PAGE_ORDER);
                 void *dup_data = alloc_phys_page();
                 if (!dup_data)
                     panic("clone_ptab: out of pages");
@@ -359,20 +359,20 @@ void reset_active_mspace(void) {
         if (!PTE_VALID(e2) || (e2.flags & PTE_G)) // skipping invalid or global
             continue;
 
-        struct pte *lvl1 = (void *)(e2.ppn << PAGE_ORDER); // finding lvl1 table
+        struct pte *lvl1 = (void *)(uintptr_t)(e2.ppn << PAGE_ORDER); // finding lvl1 table
         // checking level 1 entries
         for (unsigned i1 = 0; i1 < PTE_CNT; i1++) {
             struct pte e1 = lvl1[i1]; // loading lvl1 entry
             if (!PTE_VALID(e1) || (e1.flags & PTE_G)) // skipping invalid or global
                 continue;
 
-            struct pte *lvl0 = (void *)(e1.ppn << PAGE_ORDER); // finding lvl0 table
+            struct pte *lvl0 = (void *)(uintptr_t)(e1.ppn << PAGE_ORDER); // finding lvl0 table
             // checking level 0 entries
             for (unsigned i0 = 0; i0 < PTE_CNT; i0++) {
                 struct pte leaf = lvl0[i0]; // loading leaf PTE
                 if (!PTE_VALID(leaf) || (leaf.flags & PTE_G)) // skipping invalid or global
                     continue;
-                free_phys_page((void *)(leaf.ppn << PAGE_ORDER)); // freeing data page
+                free_phys_page((void *)(uintptr_t)(leaf.ppn << PAGE_ORDER)); // freeing data page
                 lvl0[i0] = null_pte(); // clearing leaf
             }
             lvl1[i1] = null_pte(); // clearing lvl1 entry
@@ -389,7 +389,8 @@ mtag_t discard_active_mspace(void) {
     // mtag_t TODO; 
     // TODO = 0;
     // saving current tag and page table root
-    mtag_t old_tag = csrr_satp();
+    // mtag_t old_tag = csrr_satp();
+    csrr_satp();
     struct pte *old_root = active_space_ptab();
 
     // unmapping & freeing every non-global page in current mspace
@@ -770,12 +771,12 @@ int validate_vptr(const void *vp, size_t len, int rwxu_flags) {
             return EACCESS;
         }
 
-        struct pte *lvl1 = (struct pte *)(lvl2[VPN2(addr)].ppn << PAGE_ORDER); // finding level-1 table
+        struct pte *lvl1 = (struct pte *)(uintptr_t)(lvl2[VPN2(addr)].ppn << PAGE_ORDER); // finding level-1 table
         if (!PTE_VALID(lvl1[VPN1(addr)])) {      // checking for valid level-1 entry
             return EACCESS;
         }
 
-        struct pte *lvl0 = (struct pte *)(lvl1[VPN1(addr)].ppn << PAGE_ORDER); // finding level-0 table
+        struct pte *lvl0 = (struct pte *)(uintptr_t)(lvl1[VPN1(addr)].ppn << PAGE_ORDER); // finding level-0 table
         struct pte p = lvl0[VPN0(addr)];         // fetching the leaf PTE
         // checking for valid and all requested R/W/X/U bits
         if (!PTE_VALID(p) || (p.flags & rwxu_flags) != rwxu_flags) {
@@ -797,11 +798,11 @@ int validate_vstr(const char *vs, int ug_flags) {
         if (!PTE_VALID(lvl2[VPN2(addr)]))        // checking for valid level-2 entry
             return EACCESS;
 
-        struct pte *lvl1 = (struct pte *)(lvl2[VPN2(addr)].ppn << PAGE_ORDER); // finding level-1 table
+        struct pte *lvl1 = (struct pte *)(uintptr_t)(lvl2[VPN2(addr)].ppn << PAGE_ORDER); // finding level-1 table
         if (!PTE_VALID(lvl1[VPN1(addr)]))
             return EACCESS;
 
-        struct pte *lvl0 = (struct pte *)(lvl1[VPN1(addr)].ppn << PAGE_ORDER); // finding level-0 table
+        struct pte *lvl0 = (struct pte *)(uintptr_t)(lvl1[VPN1(addr)].ppn << PAGE_ORDER); // finding level-0 table
         struct pte p = lvl0[VPN0(addr)];         // fetching the leaf PTE
         // checking for valid and all requested R/W/X/U bits
         if (!PTE_VALID(p) || (p.flags & ug_flags) != ug_flags)
