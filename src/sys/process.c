@@ -27,6 +27,7 @@
 #include "memory.h"
 #include "heap.h"
 #include "error.h"
+#include "intr.h"
 
 // COMPILE-TIME PARAMETERS
 //
@@ -67,7 +68,11 @@ char procmgr_initialized = 0;
 // EXPORTED FUNCTION DEFINITIONS
 //
 
-// helper functions
+// struct io * process_get_io(int fd)
+// Inputs: int fd - File descriptor to retrieve
+// Outputs: struct io * - Pointer to the I/O object for the given descriptor
+// Description: Returns the I/O object associated with the given file descriptor for the current process.
+// Side Effects: None
 struct io * process_get_io(int fd){
     // checking the bounds of IO array
     if(fd < 0 || fd >= PROCESS_IOMAX){
@@ -90,6 +95,14 @@ void procmgr_init(void) {
     thread_set_process(main_proc.tid, &main_proc);
     procmgr_initialized = 1;
 }
+
+// int process_exec(struct io * exeio, int argc, char ** argv)
+// Inputs: struct io * exeio - Executable file to load
+//         int argc - Argument count
+//         char ** argv - Argument vector
+// Outputs: int - Never returns on success; returns -1 on failure
+// Description: Loads a user ELF binary into a fresh memory space, sets up a new user stack, and jumps into user mode.
+// Side Effects: Clears current memory space, allocates new memory, and replaces execution context
 
 int process_exec(struct io * exeio, int argc, char ** argv) {
     assert(exeio != NULL); // validating arugments
@@ -155,7 +168,14 @@ int process_exec(struct io * exeio, int argc, char ** argv) {
     return -1;
 }
 
+// int process_fork(const struct trap_frame * tfr)
+// Inputs: const struct trap_frame * tfr - Trap frame to copy for the child process
+// Outputs: int - TID of the child on success, or negative error code on failure
+// Description: Clones the current process and memory space, creates a new thread with the copied trap frame.
+// Side Effects: Allocates memory, modifies global process table, creates new thread
+
 int process_fork(const struct trap_frame * tfr) {
+    
     //validating arguments
     assert(tfr != NULL);
 
@@ -207,6 +227,8 @@ int process_fork(const struct trap_frame * tfr) {
     struct condition done;
     condition_init(&done, "fork.done");
 
+    int pie = disable_interrupts();
+
     // spawn child thread to run fork_func and get tid for process struct member
     int tid = thread_spawn("child", (void*)fork_func, &done, child_tfr);
     if (tid < 0) { // in the case that thread spawn failed
@@ -227,8 +249,15 @@ int process_fork(const struct trap_frame * tfr) {
     thread_set_process(tid, child_proc);
 
     condition_wait(&done); // wait for child to take ownership of trap frame
+    restore_interrupts(pie); 
     return tid; // parent returns child's thread ID
 }
+
+// void process_exit(void)
+// Inputs: None
+// Outputs: None
+// Description: Terminates the current process, closes open file descriptors, frees memory, and exits its thread.
+// Side Effects: Modifies process table, deallocates memory, and ends thread execution
 
 void process_exit(void) {
     struct process *proc = current_process(); // getting current process
@@ -250,7 +279,7 @@ void process_exit(void) {
 
     fsflush();
     // discard the memory space
-    // discard_active_mspace();
+    discard_active_mspace();
 
     // remove from proctab
     if (proc->idx >= 0 && proc->idx < NPROC)
@@ -317,6 +346,13 @@ int build_stack(void * stack, int argc, char ** argv) {
     newargv[argc] = 0;
     return stksz;
 }
+
+// void fork_func(struct condition * done, struct trap_frame * tfr)
+// Inputs: struct condition * done - Synchronization primitive for parent
+//         struct trap_frame * tfr - Trap frame to jump into user mode
+// Outputs: None
+// Description: Switches to the child's memory space and enters user mode using the given trap frame.
+// Side Effects: Performs context switch, broadcasts on condition variable
 
 void fork_func(struct condition * done, struct trap_frame * tfr) {
     // switch to child’s memory space

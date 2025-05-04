@@ -43,7 +43,7 @@
 
 
 #ifndef NTHR
-#define NTHR 16
+#define NTHR 32
 #endif
 
 
@@ -325,6 +325,8 @@ int thread_spawn (
     if (child == NULL)
         return -EMTHR;
 
+    child->proc = TP->proc;
+
 
     set_thread_state(child, THREAD_READY);
 
@@ -469,6 +471,7 @@ void condition_wait(struct condition * cond) {
     trace("%s(cond=<%s>) in <%s:%d>", __func__,
         cond->name, TP->name, TP->id);
 
+    // kprintf("about to wait: TP->state = %s\n", thread_state_name(TP->state));
 
     assert(TP->state == THREAD_SELF);
 

@@ -151,7 +151,12 @@ static struct page_chunk * free_chunk_list;
 // EXPORTED FUNCTION DECLARATIONS
 // 
 
-// helper function to clone a page table based on a given lvl
+// struct pte * clone_ptab(struct pte *old_ptab, int lvl)
+// Inputs: struct pte *old_ptab - pointer to page table to clone
+//         int lvl - level of the page table to clone
+// Outputs: struct pte * - pointer to the cloned page table
+// Description: Recursively clones a multi-level page table structure.
+// Side Effects: Allocates physical memory, copies or shares page mappings
 static struct pte *clone_ptab(struct pte *old_ptab, int lvl)
 {
     // allocate a new page for this level's page table
@@ -316,11 +321,20 @@ void memory_init(void) {
 
     memory_initialized = 1;
 }
-
+// mtag_t active_mspace(void)
+// Inputs: None
+// Outputs: mtag_t - current active memory tag
+// Description: Returns the SATP tag of the currently active memory space.
+// Side Effects: None
 mtag_t active_mspace(void) {
     return active_space_mtag();
 }
 
+// mtag_t switch_mspace(mtag_t mtag)
+// Inputs: mtag_t mtag - the SATP tag to switch to
+// Outputs: mtag_t - previous SATP tag
+// Description: Switches to a new memory space identified by the given SATP tag and returns the previous one.
+// Side Effects: Flushes TLB
 mtag_t switch_mspace(mtag_t mtag) {
     mtag_t prev;
     
@@ -329,6 +343,11 @@ mtag_t switch_mspace(mtag_t mtag) {
     return prev;
 }
 
+// mtag_t clone_active_mspace(void)
+// Inputs: None
+// Outputs: mtag_t - new SATP tag for the cloned memory space
+// Description: Clones the currently active memory space including page tables and data pages, assigns a new ASID.
+// Side Effects: Allocates physical memory for new page tables and possibly data pages
 mtag_t clone_active_mspace(void) {
     // mtag_t TODO; 
     // TODO = 0; 
@@ -350,6 +369,12 @@ mtag_t clone_active_mspace(void) {
     return ptab_to_mtag(new_root, asid);
 }
 
+
+// void reset_active_mspace(void)
+// Inputs: None
+// Outputs: None
+// Description: Frees and clears all non-global user mappings in the current memory space.
+// Side Effects: Frees physical memory, modifies page tables, flushes TLB
 void reset_active_mspace(void) {
     struct pte *lvl2 = active_space_ptab(); // get root page table
 
@@ -385,6 +410,11 @@ void reset_active_mspace(void) {
     sfence_vma(); // flushing the TLB to ensure unmapped pages aren't in cache
 }
 
+// mtag_t discard_active_mspace(void)
+// Inputs: None
+// Outputs: mtag_t - SATP tag of the main kernel memory space
+// Description: Discards the current memory space, switches to the main kernel page table, and frees the root page table.
+// Side Effects: Modifies SATP, flushes TLB, frees physical memory
 mtag_t discard_active_mspace(void) {
     // mtag_t TODO; 
     // TODO = 0;
@@ -416,6 +446,13 @@ mtag_t discard_active_mspace(void) {
 // We currently map 4K pages only. At some point it may be disirable to support
 // mapping megapages and gigapages.
 
+// void* map_page(uintptr_t vma, void* pp, int rwxug_flags)
+// Inputs: uintptr_t vma - virtual address
+//         void* pp - physical page
+//         int rwxug_flags - permission flags
+// Outputs: void* - same as vma
+// Description: Maps a physical page to the specified virtual address with the given permissions.
+// Side Effects: Allocates intermediate page tables if needed, modifies page table entries, flushes TLB
 void * map_page(uintptr_t vma, void * pp, int rwxug_flags) {
     // checking that page is properly aligned
     assert(vma % PAGE_SIZE == 0);
@@ -473,6 +510,14 @@ void * map_page(uintptr_t vma, void * pp, int rwxug_flags) {
     return (void *)vma;
 }
 
+// void* map_range(uintptr_t vma, size_t size, void* pp, int rwxug_flags)
+// Inputs: uintptr_t vma - starting virtual address
+//         size_t size - number of bytes to map
+//         void* pp - starting physical address
+//         int rwxug_flags - permission flags
+// Outputs: void* - base virtual address
+// Description: Maps a range of contiguous physical pages into the virtual address space.
+// Side Effects: Calls map_page internally, modifies page tables, flushes TLB
 void * map_range(uintptr_t vma, size_t size, void * pp, int rwxug_flags) {
     // ensuring that the size is a multiple of PAGE_SIZE
     size_t rounded_size = ROUND_UP(size, PAGE_SIZE);
@@ -487,6 +532,15 @@ void * map_range(uintptr_t vma, size_t size, void * pp, int rwxug_flags) {
 
     return (void *)vma; 
 }
+
+// void* alloc_and_map_range(uintptr_t vma, size_t size, int rwxug_flags)
+// Inputs: uintptr_t vma - starting virtual address
+//         size_t size - number of bytes
+//         int rwxug_flags - permission flags
+// Outputs: void* - base virtual address
+// Description: Allocates physical memory, clears it, and maps it to the given virtual address.
+// Side Effects: Allocates and maps physical memory, flushes TLB
+
 
 void * alloc_and_map_range(uintptr_t vma, size_t size, int rwxug_flags) {
     // making sure size is a multiple of PAGE_SIZE and calculating page count
@@ -505,6 +559,14 @@ void * alloc_and_map_range(uintptr_t vma, size_t size, int rwxug_flags) {
     return (void *)vma; 
 }
 
+
+// void set_range_flags(const void* vp, size_t size, int rwxug_flags)
+// Inputs: const void* vp - starting virtual address
+//         size_t size - range in bytes
+//         int rwxug_flags - new permission flags
+// Outputs: None
+// Description: Changes permission flags of all PTEs in a given virtual address range.
+// Side Effects: Updates page table entries, flushes TLB
 void set_range_flags(const void * vp, size_t size, int rwxug_flags) {
     // ensuring that the size is a multiple of PAGE_SIZE
     size_t rounded_size = ROUND_UP(size, PAGE_SIZE);
@@ -540,6 +602,13 @@ void set_range_flags(const void * vp, size_t size, int rwxug_flags) {
     sfence_vma(); 
 }
 
+
+// void unmap_and_free_range(void* vp, size_t size)
+// Inputs: void* vp - starting virtual address
+//         size_t size - range in bytes
+// Outputs: None
+// Description: Unmaps virtual memory range and frees corresponding physical pages.
+// Side Effects: Frees physical memory, modifies page tables, flushes TLB
 void unmap_and_free_range(void * vp, size_t size) {
     // ensuring that the size is a multiple of PAGE_SIZE
     size_t rounded_size = ROUND_UP(size, PAGE_SIZE);
@@ -581,14 +650,30 @@ void unmap_and_free_range(void * vp, size_t size) {
     sfence_vma();
 }
 
+
+// void* alloc_phys_page(void)
+// Inputs: None
+// Outputs: void* - pointer to a physical page
+// Description: Allocates a single physical page.
+// Side Effects: Removes a page from the free list
 void * alloc_phys_page(void) {
     return alloc_phys_pages(1); // same as multiple pages but with pagecnt of 1
 }
 
+// void free_phys_page(void* pp)
+// Inputs: void* pp - physical page to free
+// Outputs: None
+// Description: Frees a single physical page.
+// Side Effects: Adds page to the free list
 void free_phys_page(void * pp) {
     free_phys_pages(pp, 1); // same as multiple pages but with pagecnt of 1
 }
 
+// void* alloc_phys_pages(unsigned int cnt)
+// Inputs: unsigned int cnt - number of pages to allocate
+// Outputs: void* - base physical address of allocated pages
+// Description: Allocates multiple physical pages from the free list.
+// Side Effects: Modifies free page list
 void * alloc_phys_pages(unsigned int cnt) {
     // declaring variables for navigating free_chunk_list and holding output
     struct page_chunk *curr = free_chunk_list;
@@ -638,6 +723,12 @@ void * alloc_phys_pages(unsigned int cnt) {
     return NULL;
 }
 
+// void free_phys_pages(void* pp, unsigned int cnt)
+// Inputs: void* pp - base physical page address
+//         unsigned int cnt - number of pages
+// Outputs: None
+// Description: Frees multiple physical pages.
+// Side Effects: Adds chunk back to free page list
 void free_phys_pages(void * pp, unsigned int cnt) {
     // casting provided page base address to a chunk
     struct page_chunk * free_chunk = (struct page_chunk *)pp;
@@ -650,6 +741,11 @@ void free_phys_pages(void * pp, unsigned int cnt) {
     free_chunk_list = free_chunk;
 }
 
+// unsigned long free_phys_page_count(void)
+// Inputs: None
+// Outputs: unsigned long - number of free pages
+// Description: Returns the current number of free physical pages.
+// Side Effects: None
 unsigned long free_phys_page_count(void) {
     // declaring variables for navigating free_chunk_list and holding the final page count
     struct page_chunk *curr = free_chunk_list;
@@ -664,6 +760,12 @@ unsigned long free_phys_page_count(void) {
     return count; //returning total free page count
 }
 
+// int handle_umode_page_fault(struct trap_frame* tfr, uintptr_t vma)
+// Inputs: struct trap_frame* tfr - trap frame
+//         uintptr_t vma - virtual address that caused the fault
+// Outputs: int - 1 if fault handled, 0 otherwise
+// Description: Handles user-mode page faults by allocating and mapping a zeroed page.
+// Side Effects: Allocates and maps physical memory, modifies page tables, flushes TLB
 int handle_umode_page_fault(struct trap_frame * tfr, uintptr_t vma) {
     // checking that vma is within user memory
     if (vma < UMEM_START_VMA || vma >= UMEM_END_VMA) {
@@ -697,11 +799,21 @@ int handle_umode_page_fault(struct trap_frame * tfr, uintptr_t vma) {
     return 1; // signaling handled fault
 }
 
-
+// mtag_t active_mspace(void)
+// Inputs: None
+// Outputs: mtag_t - current active memory tag
+// Description: Returns the SATP tag of the currently active memory space.
+// Side Effects: None
 mtag_t active_space_mtag(void) {
     return csrr_satp();
 }
 
+// mtag_t ptab_to_mtag(struct pte * ptab, unsigned int asid)
+// Inputs: struct pte * ptab - pointer to level-2 page table
+//         unsigned int asid - address space identifier
+// Outputs: mtag_t - SATP register value encoding this page table and ASID
+// Description: Encodes the page table pointer and ASID into an SATP value.
+// Side Effects: None
 static inline mtag_t ptab_to_mtag(struct pte * ptab, unsigned int asid) {
     return (
         ((unsigned long)PAGING_MODE << RISCV_SATP_MODE_shift) |
@@ -709,28 +821,59 @@ static inline mtag_t ptab_to_mtag(struct pte * ptab, unsigned int asid) {
         pagenum(ptab) << RISCV_SATP_PPN_shift);
 }
 
+// struct pte * mtag_to_ptab(mtag_t mtag)
+// Inputs: mtag_t mtag - SATP register value
+// Outputs: struct pte * - pointer to root page table
+// Description: Extracts the root page table pointer from an SATP value.
+// Side Effects: None
 static inline struct pte * mtag_to_ptab(mtag_t mtag) {
     return (struct pte *)((mtag << 20) >> 8);
 }
 
+// struct pte * active_space_ptab(void)
+// Inputs: None
+// Outputs: struct pte * - pointer to the current active root page table
+// Description: Returns a pointer to the current address space's level-2 page table.
+// Side Effects: None
 static inline struct pte * active_space_ptab(void) {
     return mtag_to_ptab(active_space_mtag());
 }
 
+// void * pageptr(uintptr_t n)
+// Inputs: uintptr_t n - page number
+// Outputs: void * - pointer to the start of the page
+// Description: Converts a page number to a page-aligned pointer.
+// Side Effects: None
 static inline void * pageptr(uintptr_t n) {
     return (void*)(n << PAGE_ORDER);
 }
 
+// unsigned long pagenum(const void * p)
+// Inputs: const void * p - page-aligned pointer
+// Outputs: unsigned long - page number
+// Description: Converts a pointer to its corresponding physical page number.
+// Side Effects: None
 static inline unsigned long pagenum(const void * p) {
     return (unsigned long)p >> PAGE_ORDER;
 }
 
+// int wellformed(uintptr_t vma)
+// Inputs: uintptr_t vma - virtual address
+// Outputs: int - 1 if address bits 63:38 are valid, 0 otherwise
+// Description: Checks if the given address is canonical for Sv39 addressing.
+// Side Effects: None
 static inline int wellformed(uintptr_t vma) {
     // Address bits 63:38 must be all 0 or all 1
     uintptr_t const bits = (intptr_t)vma >> 38;
     return (!bits || !(bits+1));
 }
 
+// struct pte leaf_pte(const void * pp, uint_fast8_t rwxug_flags)
+// Inputs: const void * pp - physical page
+//         uint_fast8_t rwxug_flags - permission flags
+// Outputs: struct pte - valid leaf PTE
+// Description: Constructs a leaf page table entry for a physical page.
+// Side Effects: None
 static inline struct pte leaf_pte(const void * pp, uint_fast8_t rwxug_flags) {
     return (struct pte) {
         .flags = rwxug_flags | PTE_A | PTE_D | PTE_V,
@@ -738,6 +881,12 @@ static inline struct pte leaf_pte(const void * pp, uint_fast8_t rwxug_flags) {
     };
 }
 
+// struct pte ptab_pte(const struct pte * pt, uint_fast8_t g_flag)
+// Inputs: const struct pte * pt - page table pointer
+//         uint_fast8_t g_flag - global flag
+// Outputs: struct pte - valid pointer PTE
+// Description: Constructs a page table entry pointing to another page table.
+// Side Effects: None
 static inline struct pte ptab_pte(const struct pte * pt, uint_fast8_t g_flag) {
     return (struct pte) {
         .flags = g_flag | PTE_V,
@@ -750,6 +899,13 @@ static inline struct pte null_pte(void) {
     return (struct pte) { };
 }
 
+// int validate_vptr(const void* vp, size_t len, int rwxu_flags)
+// Inputs: const void* vp - starting user pointer
+//         size_t len - length in bytes
+//         int rwxu_flags - expected access flags
+// Outputs: int - 0 if valid, error code otherwise
+// Description: Validates a user pointer range for read/write/execute access.
+// Side Effects: None
 int validate_vptr(const void *vp, size_t len, int rwxu_flags) {
     uintptr_t start = (uintptr_t)vp;              // convert pointer to integer for arithmetic
     if (!wellformed(start)) {                     // checking if wellformed
@@ -787,6 +943,12 @@ int validate_vptr(const void *vp, size_t len, int rwxu_flags) {
     return 0;
 }
 
+// int validate_vstr(const char* vs, int ug_flags)
+// Inputs: const char* vs - user string pointer
+//         int ug_flags - expected user/global access flags
+// Outputs: int - 0 if valid, error code otherwise
+// Description: Validates a null-terminated user string.
+// Side Effects: None
 int validate_vstr(const char *vs, int ug_flags) {
     uintptr_t addr = (uintptr_t)vs;               // converting to pointer for arithmetic
     if (!wellformed(addr)) {                      // checking if wellformed

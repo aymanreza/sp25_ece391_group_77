@@ -88,7 +88,12 @@ _smode_trap_entry:
 
         csrrw   sp, sscratch, sp
         beqz    sp, smode_trap_entry_from_smode
-        
+
+// Entry path: smode_trap_entry_from_umode()
+// Inputs: None (automatically entered when a trap from user mode occurs)
+// Outputs: None
+// Description: Recognizes user-mode trap context (sscratch non-zero), builds trap frame, clears sscratch, and jumps to exception or interrupt handler.
+// Side Effects: Allocates trap frame, stores registers and CSRs, calls handle_umode_exception or handle_umode_interrupt
 smode_trap_entry_from_umode:
         # sp contains kernel stack pointer, sscratch contains user stack pointer
         addi    sp, sp, -TFRSZ     # allocate trap‑frame

@@ -139,6 +139,11 @@ static void vioblk_isr(int srcno, void * aux);
 
 // Attaches a VirtIO block device. Declared and called directly from virtio.c.
 
+// void vioblk_attach(volatile struct virtio_mmio_regs * regs, int irqno)
+// Inputs: Pointer to VirtIO MMIO registers, interrupt source number
+// Outputs: None
+// Description: Initializes and registers a VirtIO block device, negotiates features, sets up the virtqueue, and installs an interrupt handler.
+// Side Effects: Allocates memory, registers device and interrupt handler, modifies device configurati
 void vioblk_attach(volatile struct virtio_mmio_regs * regs, int irqno) {
 
     // added missing variable declarations?
@@ -228,6 +233,11 @@ void vioblk_attach(volatile struct virtio_mmio_regs * regs, int irqno) {
     __sync_synchronize();
 }
 
+// static int vioblk_open(struct io ** ioptr, void * aux)
+// Inputs: Double pointer to io interface, auxiliary data (vioblk_device *)
+// Outputs: int - 0 on success, error code on failure
+// Description: Initializes virtqueue state and assigns the io pointer for the opened block device.
+// Side Effects: Modifies virtqueue state, increments io refcount
 static int vioblk_open(struct io ** ioptr, void * aux) {
 
     if (!ioptr || !aux)
@@ -248,6 +258,11 @@ static int vioblk_open(struct io ** ioptr, void * aux) {
     return 0;
 }
 
+// static void vioblk_close(struct io * io)
+// Inputs: Pointer to io interface
+// Outputs: None
+// Description: Closes the block device by resetting the virtqueue and disabling its interrupt source.
+// Side Effects: Resets virtqueue, disables interrupts
 static void vioblk_close(struct io * io) {
     // validating io argument
     assert (io != NULL);
@@ -267,6 +282,11 @@ static void vioblk_close(struct io * io) {
     debug("Device successfully closed in vioblk_close \n");
 }
 
+// static long vioblk_readat(struct io * io, unsigned long long pos, void * buf, long bufsz)
+// Inputs: Pointer to io interface, position to read from, buffer to read into, number of bytes
+// Outputs: long - number of bytes read or error code
+// Description: Reads data from the block device at a specific position into the buffer.
+// Side Effects: Blocks current thread until the read is complete, modifies virtqueue
 static long vioblk_readat(struct io * io, unsigned long long pos, void * buf, long bufsz) {
     // sanity checks
     assert(io != NULL && buf != NULL && bufsz > 0);
@@ -353,6 +373,11 @@ static long vioblk_readat(struct io * io, unsigned long long pos, void * buf, lo
     return bytes_read;
 }
 
+// static long vioblk_writeat(struct io * io, unsigned long long pos, const void * buf, long len)
+// Inputs: Pointer to io interface, position to write to, data buffer, number of bytes
+// Outputs: long - number of bytes written or error code
+// Description: Writes data to the block device from the buffer at a specific position.
+// Side Effects: Blocks current thread until the write is complete, modifies virtqueue
 static long vioblk_writeat (struct io * io, unsigned long long pos, const void * buf, long len) {
     //sainty checks
     assert(io != NULL && buf != NULL && len > 0);
@@ -436,6 +461,11 @@ static long vioblk_writeat (struct io * io, unsigned long long pos, const void *
     return bytes_written; 
 }
 
+// static int vioblk_cntl(struct io * io, int cmd, void * arg)
+// Inputs: Pointer to io interface, command integer, pointer to output argument
+// Outputs: int - 0 on success, error code on failure
+// Description: Handles block device control commands, including GETBLKSZ and GETEND.
+// Side Effects: Writes to memory pointed to by arg
 static int vioblk_cntl (struct io * io, int cmd, void * arg) {
     
     // getting the vioblk device using io pointer
@@ -464,6 +494,11 @@ static int vioblk_cntl (struct io * io, int cmd, void * arg) {
     }
 }
 
+// static void vioblk_isr(int srcno, void * aux)
+// Inputs: Interrupt source number, auxiliary data (vioblk_device *)
+// Outputs: None
+// Description: Interrupt service routine for handling completed I/O requests.
+// Side Effects: Acknowledges device interrupt, wakes waiting threads
 static void vioblk_isr(int srcno, void * aux) {
     int pie = disable_interrupts();
     debug("ISR called\n");

@@ -52,6 +52,12 @@ static const char * const excp_names[] = {
 // EXPORTED FUNCTION DEFINITIONS
 //
 
+
+// void handle_smode_exception(unsigned int cause, struct trap_frame * tfr)
+// Inputs: Exception cause code, pointer to the trap frame
+// Outputs: None (does not return)
+// Description: Handles exceptions that occur in supervisor mode. Prints detailed error messages and panics the system on unhandled exceptions.
+// Side Effects: Prints to console, terminates execution with panic
 void handle_smode_exception(unsigned int cause, struct trap_frame * tfr) {
     const char * name = NULL;
     char msgbuf[80];
@@ -91,6 +97,11 @@ void handle_smode_exception(unsigned int cause, struct trap_frame * tfr) {
     panic(msgbuf);
 }
 
+// void handle_umode_exception(unsigned int cause, struct trap_frame * tfr)
+// Inputs: Exception cause code, pointer to the trap frame
+// Outputs: None (may return if handled)
+// Description: Handles exceptions that occur in user mode. Delegates to syscall handler or page fault handler if applicable. Exits the current process if unhandled.
+// Side Effects: May call handle_syscall, may invoke page fault handler, may terminate current process
 
 void handle_umode_exception(unsigned int cause, struct trap_frame * tfr) {
     const char *name = NULL;
