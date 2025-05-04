@@ -102,7 +102,14 @@ int fsdelete(const char* name)
 //
 
 
-// helper function to read blocks in cache
+// Inputs: uint32_t block_idx - Index of the block to read 
+// void *buf - pointer to the buffer where the block data will be copied. 
+// Outputs:int -this will return 512 if it succeses or negaitve value 
+// Description: read a full block from specificed block index using the KTFS cache layer.
+// The function retrives the blcok from cache, copies it into the buffer, and release the 
+// the release the block refrence in the cache system. 
+//side Effects: preform cache operation and meory copy which may trigger a read from the
+// disk if the block is not cache.
 int ktfs_read_block_cached(uint32_t block_idx, void *buf) {
     void *blkptr;
     // computing byte offset of the block 
@@ -120,7 +127,7 @@ int ktfs_read_block_cached(uint32_t block_idx, void *buf) {
 }
 
 
-// helper to extract info from desired inode
+
 // Inputs: uint16_t inum -it will getthe inode number to read the filesystem  
 //struct ktfs_inode *out - it will point to the structure where the data will be stored
 // Outputs:int - Returns 0 on success, or a negative failure
@@ -160,7 +167,7 @@ static int ktfs_write_inode(uint16_t inum, const struct ktfs_inode *ino) {
     return 0;
 }
 
-// helper to read whatever block we want in our filesystem image
+
 // Inputs: uint32_t blockno -It will get the logical data block number witin the file system
 //void *buf - It will point to the buffer where the data will be stored  
 // Outputs: int - Returns 0 on success, or a negative failure
@@ -194,7 +201,12 @@ static int ktfs_bitmap_set(uint16_t inum) {
     return 0;
 }
 
-// helper to bump root directory size and write back
+
+// Inputs:  uint32_t delta -the number of bytes to increment the root directory inode size 
+// Outputs: int - return 0 if it sucesses or negative error code on filure from inode read/write operation 
+// Description: read the root directory inode from the desk, increment the slze by the delta value, and write 
+// the update indoe bakc to the disk. Th will when the new entires are added to the new direcotry to the root direcotry 
+// Side Effects: This will performs disk to read and write root inode and modifes to the on disk 
 static int ktfs_update_root_size(uint32_t delta) {
     // read current root inode
     struct ktfs_inode root_inode;
@@ -207,7 +219,13 @@ static int ktfs_update_root_size(uint32_t delta) {
     return ktfs_write_inode(fs.sb.root_directory_inode, &root_inode);
 }
 
-// helper to clear a single bit (inode or data block) in the global bitmap
+// Inputs: uint32_t bit_idx -Index of the bit to cleae the global bitmap
+// Outputs: int- return 0 if it success or negative error on the failure. 
+// Description: This is a clear specific bit in the global ktfs bitmap 
+//making the orresponding the corresponding inside or data block as free.
+//This will determine the apporiate bitmap block and bit offset, update the block memory,
+//and marj it dirty so it the change will written block to the disk
+// Side Effects:The bitmap block in the KTFS cache and mark it dirty and it preform a read from the dick
 static int ktfs_bitmap_clear_bit(uint32_t bit_idx) {
     // getting # of bits per block
     uint32_t bits_per_blk = KTFS_BLKSZ * 8;
@@ -224,7 +242,13 @@ static int ktfs_bitmap_clear_bit(uint32_t bit_idx) {
     return 0;
 }
 
-// helper to decrement root directory size by delta and write back inode
+//Inputs: uint32_t delta - the number of byte to subtract from the root drectory sze 
+//outputs: int- this will retunr 0 if it sucess or negative
+//Description: if will decrease the size of the root directory inside the specifid delta,
+//then write the uploaded inode bakc to the locatio on the disk of the KTFS cache system.
+// It will used when the directory entires are remvoed from the root. 
+//Side Effect: perfrom the read and write to the KTFS inode to the region to the cache
+// and modifies root inode data 
 static int ktfs_shrink_root(uint32_t delta) {
     struct ktfs_inode root_inode;
     int ret = ktfs_read_inode(fs.sb.root_directory_inode, &root_inode);
@@ -243,7 +267,12 @@ static int ktfs_shrink_root(uint32_t delta) {
     return 0;
 }
 
-// helper to allocate a free data block by scanning the bitmap
+// Inputs:  uint32_t *out_blockno - Output pointer that will be set to the newly allocated data block number
+// Outputs: int - Returns 0 on success, or if no free data block is available,
+//                or a negative error code from cache operations
+// Description: Scans the global KTFS bitmap to find a free data block. Marks the corresponding
+//              bit in the bitmap as used, and returns the data block number
+// Side Effects: Modifies the global bitmap via the cache system. This may perform disk I/O to load bitmap blocks
 static int ktfs_alloc_data_block(uint32_t *out_blockno) {
     uint32_t bits = fs.sb.block_count; //total filesystem block count
     for (uint32_t idx = 0; idx < bits; idx++) {
@@ -272,7 +301,12 @@ static int ktfs_alloc_data_block(uint32_t *out_blockno) {
     return -ENODATABLKS;
 }
 
-// helper to grow a file
+// Inputs:  struct ktfs_file *file - pointer to the file object whose size it to extended 
+//          unsigned long long new_end - this will new desried file size in bytes 
+// outputs: int- It will return 0 on succeses or negative code on failure 
+// Description: It will grow a file by allocating the new data block to extende the file to bytes 
+// and update the inode on disk and the memory file structure.
+//Side Effect: Allocate new data block, modifes the file inode and update data on disk 
 static int ktfs_set_end(struct ktfs_file *file, unsigned long long new_end) {
     struct ktfs_inode inode;
     int ret = ktfs_read_inode(file->inode_num, &inode);
@@ -299,7 +333,12 @@ static int ktfs_set_end(struct ktfs_file *file, unsigned long long new_end) {
     return 0;
 }
 
-// helper to free all blocks held by an inode
+// Inputs:  uint16_t inum -inode number of the file whose data block should be free 
+//Outputs: int - return 0 on success or negative erro on failure 
+//Description: free all data block associated with the given inode, inclding direct, indirect,
+// and doubly indirect blocks. It clear corresponding bits in the bit map.
+///side effect: This willl get the bit map and relesse allocated data block back to the system
+// and perform multiple disk read to the cache system.  
 static int ktfs_free_inode_blocks(uint16_t inum) {
     struct ktfs_inode inode;
     int ret = ktfs_read_inode(inum, &inode);
@@ -695,16 +734,24 @@ int ktfs_flush(void) {
     lock_release(&fs.fs_lock); //release lock
     return ret;
 }
-
+// Inputs:  struct io *io - I/O object that is open KTFS file 
+// unsigned long long pos - offset the file where write should begin 
+//const void *buf -this will point to the bufwre ontaining the data to write 
+///  long len -  this will number of bytes write to the buffer 
+// Outputs: long -return the numnber of bytes written on success or negative code on failure 
+// Description: wirte to len byte  from buf into the file starting postion. It will grow the file 
+//if the write exceeds the current file size. Allocates new blocks as needed and updates the cache.
+//Side Effect it will modifed the file inode, data blocks and the block bitmap 
+//and allowcate the new data block and write to the disk to the cache 
 long ktfs_writeat(struct io *io, unsigned long long pos, const void *buf, long len) {
-    if (!io || !buf || len < 0) return -EINVAL;
-    lock_acquire(&fs.fs_lock);
+    if (!io || !buf || len < 0) return -EINVAL;  //invalid argument 
+    lock_acquire(&fs.fs_lock); // acquire filesystem lock
     struct ktfs_file *file = (void *)((char *)io - offsetof(struct ktfs_file, io));
-    if (file->flags != KTFS_FILE_IN_USE) {
+    if (file->flags != KTFS_FILE_IN_USE) { //ensure the file is actulaly open 
         lock_release(&fs.fs_lock);
         return -EINVAL;
     }
-    // grow file if writing past EOF
+  //if the writing past it, it will grow the file 
     unsigned long long end_pos = pos + len;
     if (end_pos > file->size) {
         int e2 = ktfs_set_end(file, end_pos);
@@ -713,6 +760,7 @@ long ktfs_writeat(struct io *io, unsigned long long pos, const void *buf, long l
             return e2; 
         }
     }
+    //it will read the inode of the block loop  
     struct ktfs_inode inode;
     int ret = ktfs_read_inode(file->inode_num, &inode);
     if (ret < 0) { 
@@ -721,12 +769,12 @@ long ktfs_writeat(struct io *io, unsigned long long pos, const void *buf, long l
     }
     long total = 0;
     while (total < len) {
-        uint64_t cur = pos + total;
-        uint32_t bidx = cur / KTFS_BLKSZ;
-        uint32_t boff = cur % KTFS_BLKSZ;
-        uint32_t left = len - total;
-        uint32_t to = KTFS_BLKSZ - boff;
-        if (to > left) to = left;
+        uint64_t cur = pos + total;   //current write postion 
+        uint32_t bidx = cur / KTFS_BLKSZ; ///block index 
+        uint32_t boff = cur % KTFS_BLKSZ;  //offset in the block 
+        uint32_t left = len - total;       //remaing bytes 
+        uint32_t to = KTFS_BLKSZ - boff;  //bytes that can fit the block 
+        if (to > left) to = left;         // clamp to the remaining bytes 
         uint32_t phys;
         ret = get_blocknum_for_offset(&inode, bidx, &phys);
         if (ret < 0) { 
@@ -734,27 +782,34 @@ long ktfs_writeat(struct io *io, unsigned long long pos, const void *buf, long l
             return ret; 
         }
         void *blk;
-        uint64_t disk_off = (1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + phys) * KTFS_BLKSZ;
-        ret = cache_get_block(fs.cache, disk_off, &blk);
+        ///calculate the bytes offset in the device 
+        uint64_t disk_off = (1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + phys) * KTFS_BLKSZ; //it wil get the physicla block 
+        ret = cache_get_block(fs.cache, disk_off, &blk); // fetch the cache
         if (ret < 0) { 
             lock_release(&fs.fs_lock); 
             return ret; 
         }
+        // this will copy the data into the block and mark it dirty 
         memcpy((char *)blk + boff, (char *)buf + total, to);
-        cache_release_block(fs.cache, blk, 1);
+        cache_release_block(fs.cache, blk, 1); //release the block as dirty
         total += to;
     }
     lock_release(&fs.fs_lock);
-    return total;
+    return total; //it will return the total bytes written
 }
-
+// Inputs:  const char* name - Null-terminated name of the new file to create in the root directory
+// Outputs: int - Returns 0 on success, or a negative on failure 
+// Description: Creates a new empty file with the given name in the KTFS root directory.
+//              Allocates an inode, updates the directory entry, and initializes on-disk metadata.
+// Side Effects: Allocates a new inode and possibly a new directory data block and
+// modifies the inode and block bitmap and updates root directory metadata 
 int ktfs_create(const char* name) {
     if (!name || strlen(name) > KTFS_MAX_FILENAME_LEN)
-        return -EINVAL;
+        return -EINVAL; //check if it invalid name 
 
-    lock_acquire(&fs.fs_lock);
+    lock_acquire(&fs.fs_lock); //accqurie lock 
 
-    // finding root directory inode
+    //  read root directory inode 
     struct ktfs_inode root_inode;
     int ret = ktfs_read_inode(fs.sb.root_directory_inode, &root_inode);
     if (ret < 0) { 
@@ -762,7 +817,7 @@ int ktfs_create(const char* name) {
         return ret; 
     }
 
-    // if no directory block yet, allocate & zero it
+    // the root directory has a no data block allocaite one 
     if (root_inode.block[0] == 0) {
         uint32_t new_blk;
         ret = ktfs_alloc_data_block(&new_blk);
@@ -777,7 +832,7 @@ int ktfs_create(const char* name) {
             return ret; 
         }
 
-        // zero the new block
+        // it will zero out the new direcotry block 
         char zero[KTFS_BLKSZ] = {0};
         uint32_t global = 1 + fs.sb.bitmap_block_count
                         + fs.sb.inode_block_count
@@ -792,7 +847,7 @@ int ktfs_create(const char* name) {
         cache_release_block(fs.cache, bp, 1);
     }
 
-    // finding free slot or detect duplicates
+    // find the free directory slot or duplicate 
     struct ktfs_dir_entry dentries[KTFS_BLKSZ / KTFS_DENSZ];
     int free_idx = -1, block_idx = -1;
     for (int i = 0; i < KTFS_NUM_DIRECT_DATA_BLOCKS; i++) {
@@ -816,31 +871,31 @@ int ktfs_create(const char* name) {
     }
     if (free_idx < 0) {
         lock_release(&fs.fs_lock);
-        return -EINVAL;
+        return -EINVAL; //no space 
     }
 
-    // finding free inode
+    //find the free node 
     uint32_t ipb = KTFS_BLKSZ / KTFS_INOSZ;
     uint32_t total_inodes = fs.sb.inode_block_count * ipb;
     struct ktfs_inode tmp;
     uint16_t free_inum;
     for (free_inum = 0; free_inum < total_inodes; free_inum++) {
         ret = ktfs_read_inode(free_inum, &tmp);
-        if (ret == 0 && tmp.flags == 0) break;
+        if (ret == 0 && tmp.flags == 0) break; ///unused inode 
     }
     if (free_inum >= total_inodes) {
         lock_release(&fs.fs_lock);
         return -ENOINODEBLKS;
     }
 
-    // updating inode in bitmap
+    //initalize the new inode 
     ret = ktfs_bitmap_set(free_inum);
     if (ret < 0) { 
         lock_release(&fs.fs_lock); 
         return ret; 
     }
 
-    // initializing & writing new inode
+    // it will intialize the new node 
     struct ktfs_inode new_inode = {0};
     new_inode.flags = KTFS_FILE_IN_USE;
     ret = ktfs_write_inode(free_inum, &new_inode);
@@ -849,7 +904,7 @@ int ktfs_create(const char* name) {
         return ret; 
     }
 
-    // inserting directory entry
+    // inseer the new directory entry
     ret = ktfs_read_data_block(root_inode.block[block_idx], dentries);
     if (ret < 0) { 
         lock_release(&fs.fs_lock); 
@@ -859,7 +914,7 @@ int ktfs_create(const char* name) {
     dentries[free_idx].name[KTFS_MAX_FILENAME_LEN] = '\0';
     dentries[free_idx].inode = free_inum;
 
-    // writing back updated directory block
+    // write updated directory block
     uint32_t dblk = 1 + fs.sb.bitmap_block_count + fs.sb.inode_block_count + root_inode.block[block_idx];
     void *dptr;
     ret = cache_get_block(fs.cache, dblk * KTFS_BLKSZ, &dptr);
@@ -870,7 +925,7 @@ int ktfs_create(const char* name) {
     memcpy(dptr, dentries, KTFS_BLKSZ);
     cache_release_block(fs.cache, dptr, 1);
 
-    // updating root directory size
+// update root inode size
     ret = ktfs_update_root_size(KTFS_DENSZ);
     if (ret < 0) { 
         lock_release(&fs.fs_lock); 
@@ -880,13 +935,19 @@ int ktfs_create(const char* name) {
     lock_release(&fs.fs_lock);
     return 0;
 }
-
+// Inputs:  const char* name - the name of the file to delete from the root directory
+// Outputs: int - Returns 0 on success, or a negative on failure
+// Description: Deletes a file from the KTFS root directory. Frees all data blocks used by the file,
+//              clears its inode and bitmap entries, shifts directory entries to fill the gap,
+//              and updates root directory size.
+// Side Effects: free allocated the data and inode and the bit map and root directory block 
+// and update on the disk data on the cache 
 int ktfs_delete(const char* name) {
     if (!name || strlen(name) > KTFS_MAX_FILENAME_LEN)
         return -EINVAL;
-    lock_acquire(&fs.fs_lock);
+    lock_acquire(&fs.fs_lock); //lock fileystem 
 
-    // finding root directory inode
+   //search the directory entry 
     struct ktfs_inode root_inode;
     int ret = ktfs_read_inode(fs.sb.root_directory_inode, &root_inode);
     if (ret < 0) { 
@@ -894,7 +955,7 @@ int ktfs_delete(const char* name) {
         return ret; 
     }
 
-    // finding directory entry
+    // finding  the directory entry
     struct ktfs_dir_entry dentries[KTFS_BLKSZ / KTFS_DENSZ];
     int block_idx = -1, entry_idx = -1;
     uint16_t target_inum = 0;
@@ -921,7 +982,7 @@ int ktfs_delete(const char* name) {
         return -ENOENT;
     }
 
-    // freeing all of the file's data blocks
+   //free the file block
     ret = ktfs_free_inode_blocks(target_inum);
     if (ret < 0) { 
         lock_release(&fs.fs_lock); 
