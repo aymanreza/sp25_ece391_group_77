@@ -1,4 +1,4 @@
-# ECE 391 – Educational Operating System (RISC-V)
+# Operating System (RISC-V)
 
 A Unix-like educational operating system built in C for the RISC-V architecture,
 implementing virtual memory, process management, threading, filesystems,
